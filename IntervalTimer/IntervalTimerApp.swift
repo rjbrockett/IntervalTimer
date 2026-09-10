@@ -1,11 +1,5 @@
-//
-//  IntervalTimerApp.swift
-//  IntervalTimer
-//
-//  Created by Roger Brockett on 8/31/26.
-//
-
 import SwiftUI
+import SwiftData
 
 @main
 struct IntervalTimerApp: App {
@@ -13,5 +7,13 @@ struct IntervalTimerApp: App {
         WindowGroup {
             ContentView()
         }
+        .modelContainer(for: [WorkoutTemplate.self, IntervalBlock.self, IntervalItem.self])
+        
+        #if os(macOS)
+        Settings {
+            Text("IntervalTimer Settings")
+                .frame(width: 400, height: 300)
+        }
+        #endif
     }
 }
