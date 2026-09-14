@@ -1,23 +1,79 @@
 import SwiftUI
 import SwiftData
 
+private let maxNestingDepth = 4
+
+// Depth-based color for visual nesting
+private func depthColor(_ depth: Int) -> Color {
+    let colors: [Color] = [.blue, .purple, .orange, .green, .pink]
+    return colors[depth % colors.count]
+}
+
+// MARK: - Template Editor (with save/cancel via child context)
+
 struct TemplateEditorView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Bindable var template: WorkoutTemplate
+    @Environment(\.modelContext) private var parentContext
+    let template: WorkoutTemplate
     
     @State private var editingTemplateName = false
+    @State private var hasUnsavedChanges = false
+    @State private var showingDiscardAlert = false
+    
+    // Child context for transactional editing
+    @State private var childContext: ModelContext?
+    @State private var editableTemplate: WorkoutTemplate?
     
     var body: some View {
+        Group {
+            if let editableTemplate {
+                editorContent(for: editableTemplate)
+            } else {
+                // Fallback: edit directly (used in previews or before context is ready)
+                editorContent(for: template)
+            }
+        }
+        .onAppear {
+            setupChildContext()
+        }
+        .onChange(of: template.id) {
+            setupChildContext()
+        }
+    }
+    
+    private func setupChildContext() {
+        let container = parentContext.container
+        let child = ModelContext(container)
+        child.autosaveEnabled = false
+        self.childContext = child
+        
+        // Fetch the same template in the child context
+        let templateID = template.id
+        let descriptor = FetchDescriptor<WorkoutTemplate>(
+            predicate: #Predicate { $0.id == templateID }
+        )
+        if let fetched = try? child.fetch(descriptor).first {
+            self.editableTemplate = fetched
+        } else {
+            // Template not persisted yet (e.g., preview) — edit directly
+            self.editableTemplate = nil
+        }
+        hasUnsavedChanges = false
+    }
+    
+    @ViewBuilder
+    private func editorContent(for template: WorkoutTemplate) -> some View {
         List {
             Section {
                 HStack {
                     if editingTemplateName {
-                        TextField("Template Name", text: $template.name)
-                            .textFieldStyle(.roundedBorder)
-                            .onSubmit {
-                                editingTemplateName = false
-                                template.updatedAt = Date()
-                            }
+                        TextField("Template Name", text: Binding(
+                            get: { template.name },
+                            set: { template.name = $0; markChanged() }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit {
+                            editingTemplateName = false
+                        }
                     } else {
                         Text(template.name)
                             .font(.title2)
@@ -39,11 +95,33 @@ struct TemplateEditorView: View {
             }
             
             ForEach(template.sortedBlocks) { block in
-                BlockEditorSection(block: block, template: template)
+                BlockEditorSection(
+                    block: block,
+                    template: template,
+                    depth: 0,
+                    onChanged: markChanged
+                )
+            }
+            .onMove { source, destination in
+                var sortedBlocks = template.blocks.sorted { $0.sortOrder < $1.sortOrder }
+                sortedBlocks.move(fromOffsets: source, toOffset: destination)
+                for (index, block) in sortedBlocks.enumerated() {
+                    block.sortOrder = index
+                }
+                markChanged()
             }
             
             Section {
-                Button(action: addBlock) {
+                Button(action: {
+                    let newBlock = IntervalBlock(
+                        name: "Block \(template.blocks.count + 1)",
+                        repeatCount: 1,
+                        sortOrder: template.blocks.count,
+                        intervals: []
+                    )
+                    template.blocks.append(newBlock)
+                    markChanged()
+                }) {
                     Label("Add Block", systemImage: "plus.circle.fill")
                 }
             }
@@ -55,68 +133,81 @@ struct TemplateEditorView: View {
                 EditButton()
             }
             #endif
+            
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Save") {
+                    saveChanges()
+                }
+                .disabled(!hasUnsavedChanges)
+            }
+            
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Revert") {
+                    setupChildContext()
+                }
+                .disabled(!hasUnsavedChanges)
+            }
         }
     }
     
-    private func addBlock() {
-        let newBlock = IntervalBlock(
-            name: "Block \(template.blocks.count + 1)",
-            repeatCount: 1,
-            sortOrder: template.blocks.count,
-            intervals: []
-        )
-        template.blocks.append(newBlock)
-        template.updatedAt = Date()
+    private func markChanged() {
+        hasUnsavedChanges = true
+    }
+    
+    private func saveChanges() {
+        guard let childContext else { return }
+        editableTemplate?.updatedAt = Date()
+        try? childContext.save()
+        hasUnsavedChanges = false
     }
 }
+
+// MARK: - Block Editor Section (recursive)
 
 struct BlockEditorSection: View {
     @Environment(\.modelContext) private var modelContext
     @Bindable var block: IntervalBlock
     let template: WorkoutTemplate
+    let depth: Int
+    var onChanged: () -> Void
     
     @State private var isExpanded = true
     @State private var editingBlockName = false
     
+    private var blockColor: Color {
+        depthColor(depth)
+    }
+    
     var body: some View {
         Section {
-            // Block header
+            // Block controls
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    if editingBlockName {
-                        TextField("Block Name (optional)", text: Binding(
-                            get: { block.name ?? "" },
-                            set: { block.name = $0.isEmpty ? nil : $0 }
-                        ))
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit {
-                            editingBlockName = false
-                            template.updatedAt = Date()
-                        }
-                    } else {
-                        Text(block.name ?? "Unnamed Block")
-                            .font(.headline)
-                            .onTapGesture {
-                                editingBlockName = true
+                    // Typeable repeat counter with stepper arrows
+                    HStack(spacing: 2) {
+                        Text("Repeat:")
+                            .foregroundStyle(.secondary)
+                        
+                        TextField("", value: Binding(
+                            get: { block.repeatCount },
+                            set: { newVal in
+                                block.repeatCount = max(1, min(99, newVal))
+                                onChanged()
                             }
+                        ), format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 45)
+                        .multilineTextAlignment(.center)
+                        
+                        Stepper("", value: Binding(
+                            get: { block.repeatCount },
+                            set: { newVal in
+                                block.repeatCount = max(1, min(99, newVal))
+                                onChanged()
+                            }
+                        ), in: 1...99)
+                        .labelsHidden()
                     }
-                    Spacer()
-                    if !editingBlockName {
-                        Button {
-                            editingBlockName = true
-                        } label: {
-                            Label("Rename", systemImage: "pencil")
-                                .labelStyle(.iconOnly)
-                        }
-                        .buttonStyle(.borderless)
-                    }
-                }
-                
-                HStack {
-                    Stepper("Repeat: \(block.repeatCount)x", value: $block.repeatCount, in: 1...99)
-                        .onChange(of: block.repeatCount) {
-                            template.updatedAt = Date()
-                        }
                     
                     Spacer()
                     
@@ -135,30 +226,105 @@ struct BlockEditorSection: View {
             }
             .padding(.vertical, 4)
             
-            // Intervals in this block
+            // Content: intervals and/or child blocks
             if isExpanded {
-                ForEach(block.intervals.sorted(by: { $0.sortOrder < $1.sortOrder })) { interval in
-                    IntervalRowView(interval: interval, block: block, template: template)
+                // Intervals
+                ForEach(block.sortedIntervals) { interval in
+                    IntervalRowView(
+                        interval: interval,
+                        block: block,
+                        template: template,
+                        depth: depth,
+                        onChanged: onChanged
+                    )
                 }
                 .onMove { source, destination in
                     moveIntervals(from: source, to: destination)
                 }
                 
-                Button(action: addInterval) {
-                    Label("Add Interval", systemImage: "plus.circle")
+                // Child blocks
+                ForEach(block.sortedChildBlocks) { childBlock in
+                    BlockEditorSection(
+                        block: childBlock,
+                        template: template,
+                        depth: depth + 1,
+                        onChanged: onChanged
+                    )
+                }
+                .onMove { source, destination in
+                    moveChildBlocks(from: source, to: destination)
+                }
+                
+                // Add buttons
+                HStack {
+                    Button(action: addInterval) {
+                        Label("Add Interval", systemImage: "plus.circle")
+                    }
+                    
+                    if depth < maxNestingDepth {
+                        Button(action: addChildBlock) {
+                            Label("Add Sub-Block", systemImage: "folder.badge.plus")
+                        }
+                    }
                 }
             }
         } header: {
-            Button(action: { isExpanded.toggle() }) {
-                HStack {
-                    Text(block.name ?? "Unnamed Block")
-                    Spacer()
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+            HStack {
+                if editingBlockName {
+                    TextField("Block Name", text: Binding(
+                        get: { block.name ?? "" },
+                        set: { block.name = $0.isEmpty ? nil : $0 }
+                    ))
+                    .font(.headline)
+                    .fontWeight(.bold)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit {
+                        editingBlockName = false
+                        onChanged()
+                    }
+                } else {
+                    Button(action: { isExpanded.toggle() }) {
+                        HStack {
+                            Text(block.name ?? "Unnamed Block")
+                                .font(.headline)
+                                .fontWeight(.bold)
+                            if block.isGroup {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        }
+                    }
+                    .buttonStyle(.plain)
                 }
+                
+                Button {
+                    editingBlockName.toggle()
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                        .labelStyle(.iconOnly)
+                }
+                .buttonStyle(.borderless)
             }
-            .buttonStyle(.plain)
         }
+        // Visual distinction for sub-blocks: indentation + colored left border
+        .padding(.leading, CGFloat(depth) * 16)
+        .listRowBackground(
+            depth > 0
+            ? AnyView(
+                HStack(spacing: 0) {
+                    Spacer().frame(width: CGFloat(depth) * 16 - 4)
+                    blockColor.frame(width: 4)
+                    Color.clear
+                }
+            )
+            : AnyView(Color.clear)
+        )
     }
+    
+    // MARK: - Actions
     
     private func addInterval() {
         let newInterval = IntervalItem(
@@ -167,35 +333,65 @@ struct BlockEditorSection: View {
             sortOrder: block.intervals.count
         )
         block.intervals.append(newInterval)
-        template.updatedAt = Date()
+        onChanged()
+    }
+    
+    private func addChildBlock() {
+        let newBlock = IntervalBlock(
+            name: "Sub-Block \(block.childBlocks.count + 1)",
+            repeatCount: 1,
+            sortOrder: block.childBlocks.count,
+            intervals: [],
+            parentBlock: block
+        )
+        block.childBlocks.append(newBlock)
+        onChanged()
     }
     
     private func moveIntervals(from source: IndexSet, to destination: Int) {
         var sortedIntervals = block.intervals.sorted { $0.sortOrder < $1.sortOrder }
         sortedIntervals.move(fromOffsets: source, toOffset: destination)
-        
         for (index, interval) in sortedIntervals.enumerated() {
             interval.sortOrder = index
         }
-        template.updatedAt = Date()
+        onChanged()
+    }
+    
+    private func moveChildBlocks(from source: IndexSet, to destination: Int) {
+        var sorted = block.childBlocks.sorted { $0.sortOrder < $1.sortOrder }
+        sorted.move(fromOffsets: source, toOffset: destination)
+        for (index, child) in sorted.enumerated() {
+            child.sortOrder = index
+        }
+        onChanged()
     }
     
     private func deleteBlock() {
+        if let parent = block.parentBlock {
+            parent.childBlocks.removeAll { $0.id == block.id }
+        } else {
+            template.blocks.removeAll { $0.id == block.id }
+        }
         modelContext.delete(block)
-        template.updatedAt = Date()
+        onChanged()
     }
     
     private func duplicateBlock() {
         let duplicatedBlock = block.duplicate()
         duplicatedBlock.sortOrder = block.sortOrder + 1
         
-        // Shift sort orders of blocks after this one
-        for existingBlock in template.blocks where existingBlock.sortOrder > block.sortOrder {
-            existingBlock.sortOrder += 1
+        if let parent = block.parentBlock {
+            for existing in parent.childBlocks where existing.sortOrder > block.sortOrder {
+                existing.sortOrder += 1
+            }
+            parent.childBlocks.append(duplicatedBlock)
+        } else {
+            for existing in template.blocks where existing.sortOrder > block.sortOrder {
+                existing.sortOrder += 1
+            }
+            template.blocks.append(duplicatedBlock)
         }
-        
-        template.blocks.append(duplicatedBlock)
-        template.updatedAt = Date()
+        onChanged()
     }
 }
 
@@ -265,15 +461,9 @@ struct DurationPickerView: View {
     
     #if os(macOS)
     private var macOSPicker: some View {
-        HStack(spacing: 4) {
-            Button {
-                if duration > 5 { duration -= 5 }
-            } label: {
-                Image(systemName: "minus")
-            }
-            .buttonStyle(.borderless)
-            
-            HStack(spacing: 2) {
+        HStack(spacing: 12) {
+            // Minutes group
+            HStack(spacing: 4) {
                 TextField("", value: Binding(
                     get: { minutes },
                     set: { newMin in
@@ -288,6 +478,19 @@ struct DurationPickerView: View {
                 Text("m")
                     .foregroundStyle(.secondary)
                 
+                Stepper("", value: Binding(
+                    get: { minutes },
+                    set: { newMin in
+                        duration = TimeInterval(max(0, newMin) * 60 + seconds)
+                        if duration < 5 { duration = 5 }
+                        if duration > 3600 { duration = TimeInterval(59 * 60 + seconds) }
+                    }
+                ), in: 0...59)
+                .labelsHidden()
+            }
+            
+            // Seconds group
+            HStack(spacing: 4) {
                 TextField("", value: Binding(
                     get: { seconds },
                     set: { newSec in
@@ -302,38 +505,59 @@ struct DurationPickerView: View {
                 
                 Text("s")
                     .foregroundStyle(.secondary)
+                
+                Stepper("", value: Binding(
+                    get: { seconds },
+                    set: { newSec in
+                        let clamped = max(0, min(55, newSec))
+                        duration = TimeInterval(minutes * 60 + clamped)
+                        if duration < 5 { duration = 5 }
+                    }
+                ), in: 0...55, step: 5)
+                .labelsHidden()
             }
-            
-            Button {
-                if duration < 3600 { duration += 5 }
-            } label: {
-                Image(systemName: "plus")
-            }
-            .buttonStyle(.borderless)
         }
     }
     #endif
 }
+
+// MARK: - Interval Row
 
 struct IntervalRowView: View {
     @Environment(\.modelContext) private var modelContext
     @Bindable var interval: IntervalItem
     let block: IntervalBlock
     let template: WorkoutTemplate
+    let depth: Int
+    var onChanged: () -> Void
     
     @State private var editingName = false
     @State private var showingDurationPicker = false
     
+    private var rowColor: Color {
+        depthColor(depth)
+    }
+    
     var body: some View {
         HStack {
+            // Nesting color indicator
+            if depth > 0 {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(rowColor.opacity(0.3))
+                    .frame(width: 3)
+            }
+            
             if editingName {
-                TextField("Name", text: $interval.name)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit {
-                        editingName = false
-                        template.updatedAt = Date()
-                    }
-                    .frame(maxWidth: 150)
+                TextField("Name", text: Binding(
+                    get: { interval.name },
+                    set: { interval.name = $0 }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .onSubmit {
+                    editingName = false
+                    onChanged()
+                }
+                .frame(maxWidth: 150)
             } else {
                 Text(interval.name)
                     .lineLimit(1)
@@ -353,14 +577,14 @@ struct IntervalRowView: View {
             }
             .buttonStyle(.bordered)
             .popover(isPresented: $showingDurationPicker) {
-                DurationPickerView(duration: $interval.duration)
-                    .padding()
-                    .onChange(of: interval.duration) {
-                        template.updatedAt = Date()
-                    }
-                    #if os(macOS)
-                    .frame(width: 220, height: 50)
-                    #endif
+                DurationPickerView(duration: Binding(
+                    get: { interval.duration },
+                    set: { interval.duration = $0; onChanged() }
+                ))
+                .padding()
+                #if os(macOS)
+                .frame(width: 320, height: 50)
+                #endif
             }
             
             Button(action: duplicateInterval) {
@@ -381,18 +605,18 @@ struct IntervalRowView: View {
         let duplicated = interval.duplicate()
         duplicated.sortOrder = interval.sortOrder + 1
         
-        // Shift sort orders of intervals after this one
         for existingInterval in block.intervals where existingInterval.sortOrder > interval.sortOrder {
             existingInterval.sortOrder += 1
         }
         
         block.intervals.append(duplicated)
-        template.updatedAt = Date()
+        onChanged()
     }
     
     private func deleteInterval() {
+        block.intervals.removeAll { $0.id == interval.id }
         modelContext.delete(interval)
-        template.updatedAt = Date()
+        onChanged()
     }
     
     private func formatDuration(_ seconds: TimeInterval) -> String {
@@ -409,6 +633,8 @@ struct IntervalRowView: View {
         }
     }
 }
+
+// MARK: - Preview
 
 #Preview {
     NavigationStack {

@@ -37,6 +37,9 @@ struct ContentView: View {
                 }
                 .swipeActions(edge: .trailing) {
                     Button(role: .destructive) {
+                        if selectedTemplate?.id == template.id {
+                            selectedTemplate = nil
+                        }
                         modelContext.delete(template)
                     } label: {
                         Label("Delete", systemImage: "trash")
@@ -44,7 +47,18 @@ struct ContentView: View {
                 }
                 #if os(macOS)
                 .contextMenu {
+                    Button {
+                        duplicateTemplate(template)
+                    } label: {
+                        Label("Duplicate", systemImage: "doc.on.doc")
+                    }
+                    
+                    Divider()
+                    
                     Button(role: .destructive) {
+                        if selectedTemplate?.id == template.id {
+                            selectedTemplate = nil
+                        }
                         modelContext.delete(template)
                     } label: {
                         Label("Delete", systemImage: "trash")
@@ -115,10 +129,14 @@ struct ContentView: View {
         selectedTemplate = template
     }
     
-    private func deleteTemplates(at offsets: IndexSet) {
-        for index in offsets {
-            modelContext.delete(templates[index])
-        }
+    private func duplicateTemplate(_ original: WorkoutTemplate) {
+        let newBlocks = original.blocks.map { $0.duplicate() }
+        let copy = WorkoutTemplate(
+            name: "\(original.name) Copy",
+            blocks: newBlocks
+        )
+        modelContext.insert(copy)
+        selectedTemplate = copy
     }
     
     private func seedSampleData() {
@@ -172,8 +190,39 @@ struct ContentView: View {
             blocks: [tabata]
         )
         
+        // Sample 3: Nested HIIT Circuit
+        let upperBody = IntervalBlock(
+            name: "Upper Body",
+            repeatCount: 2,
+            sortOrder: 0,
+            intervals: [
+                IntervalItem(name: "Pushups", duration: 30, sortOrder: 0),
+                IntervalItem(name: "Rest", duration: 15, sortOrder: 1)
+            ]
+        )
+        let lowerBody = IntervalBlock(
+            name: "Lower Body",
+            repeatCount: 2,
+            sortOrder: 1,
+            intervals: [
+                IntervalItem(name: "Squats", duration: 30, sortOrder: 0),
+                IntervalItem(name: "Rest", duration: 15, sortOrder: 1)
+            ]
+        )
+        let circuit = IntervalBlock(
+            name: "Circuit",
+            repeatCount: 3,
+            sortOrder: 0,
+            childBlocks: [upperBody, lowerBody]
+        )
+        let template3 = WorkoutTemplate(
+            name: "3x HIIT Circuit",
+            blocks: [circuit]
+        )
+        
         modelContext.insert(template1)
         modelContext.insert(template2)
+        modelContext.insert(template3)
     }
 }
 

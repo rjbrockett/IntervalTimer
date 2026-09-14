@@ -53,14 +53,27 @@ final class WorkoutPlayer {
     /// Flatten a WorkoutTemplate into a linear list of PlaybackSteps
     static func flatten(template: WorkoutTemplate) -> [PlaybackStep] {
         var steps: [PlaybackStep] = []
-        
         let sortedBlocks = template.blocks.sorted { $0.sortOrder < $1.sortOrder }
-        
         for block in sortedBlocks {
-            let sortedIntervals = block.intervals.sorted { $0.sortOrder < $1.sortOrder }
-            
-            // Repeat the block's intervals based on repeatCount
-            for _ in 0..<block.repeatCount {
+            steps.append(contentsOf: flattenBlock(block))
+        }
+        return steps
+    }
+    
+    /// Recursively flatten a single block (handles nesting)
+    private static func flattenBlock(_ block: IntervalBlock) -> [PlaybackStep] {
+        var steps: [PlaybackStep] = []
+        
+        for _ in 0..<block.repeatCount {
+            if !block.childBlocks.isEmpty {
+                // Group block: recurse into sorted child blocks
+                let sortedChildren = block.childBlocks.sorted { $0.sortOrder < $1.sortOrder }
+                for child in sortedChildren {
+                    steps.append(contentsOf: flattenBlock(child))
+                }
+            } else {
+                // Leaf block: iterate its intervals
+                let sortedIntervals = block.intervals.sorted { $0.sortOrder < $1.sortOrder }
                 for interval in sortedIntervals {
                     let step = PlaybackStep(
                         id: UUID(),
