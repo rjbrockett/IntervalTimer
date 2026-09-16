@@ -7,16 +7,12 @@ final class IntervalItem {
     var name: String
     var duration: TimeInterval  // seconds
     var sortOrder: Int
-    var trackDistance: Bool
-    var distanceGoal: Double?  // in meters, nil means no goal
     
-    init(id: UUID = UUID(), name: String, duration: TimeInterval, sortOrder: Int, trackDistance: Bool = false, distanceGoal: Double? = nil) {
+    init(id: UUID = UUID(), name: String, duration: TimeInterval, sortOrder: Int) {
         self.id = id
         self.name = name
         self.duration = duration
         self.sortOrder = sortOrder
-        self.trackDistance = trackDistance
-        self.distanceGoal = distanceGoal
     }
     
     /// Create a deep copy with a new UUID
@@ -25,9 +21,7 @@ final class IntervalItem {
             id: UUID(),
             name: name,
             duration: duration,
-            sortOrder: sortOrder,
-            trackDistance: trackDistance,
-            distanceGoal: distanceGoal
+            sortOrder: sortOrder
         )
     }
 }

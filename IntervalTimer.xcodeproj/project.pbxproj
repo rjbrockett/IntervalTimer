@@ -6,11 +6,45 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		8B1046FF3059DBC100C82D93 /* IntervalTimer Watch App Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 8B1046F53059DBBF00C82D93 /* IntervalTimer Watch App Watch App.app */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		8B1046FD3059DBC100C82D93 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 8BB018EF30460AF400597EBD /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 8B1046F43059DBBF00C82D93;
+			remoteInfo = "IntervalTimer Watch App Watch App";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		8B1047033059DBC100C82D93 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				8B1046FF3059DBC100C82D93 /* IntervalTimer Watch App Watch App.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		8B1046F53059DBBF00C82D93 /* IntervalTimer Watch App Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "IntervalTimer Watch App Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		8BB018F730460AF400597EBD /* IntervalTimer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = IntervalTimer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		8B1046F63059DBBF00C82D93 /* IntervalTimer Watch App Watch App */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "IntervalTimer Watch App Watch App";
+			sourceTree = "<group>";
+		};
 		8BB018F930460AF400597EBD /* IntervalTimer */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = IntervalTimer;
@@ -19,6 +53,13 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		8B1046F23059DBBF00C82D93 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		8BB018F430460AF400597EBD /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -33,6 +74,7 @@
 			isa = PBXGroup;
 			children = (
 				8BB018F930460AF400597EBD /* IntervalTimer */,
+				8B1046F63059DBBF00C82D93 /* IntervalTimer Watch App Watch App */,
 				8BB018F830460AF400597EBD /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,6 +83,7 @@
 			isa = PBXGroup;
 			children = (
 				8BB018F730460AF400597EBD /* IntervalTimer.app */,
+				8B1046F53059DBBF00C82D93 /* IntervalTimer Watch App Watch App.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -48,6 +91,28 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		8B1046F43059DBBF00C82D93 /* IntervalTimer Watch App Watch App */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 8B1047003059DBC100C82D93 /* Build configuration list for PBXNativeTarget "IntervalTimer Watch App Watch App" */;
+			buildPhases = (
+				8B1046F13059DBBF00C82D93 /* Sources */,
+				8B1046F23059DBBF00C82D93 /* Frameworks */,
+				8B1046F33059DBBF00C82D93 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				8B1046F63059DBBF00C82D93 /* IntervalTimer Watch App Watch App */,
+			);
+			name = "IntervalTimer Watch App Watch App";
+			packageProductDependencies = (
+			);
+			productName = "IntervalTimer Watch App Watch App";
+			productReference = 8B1046F53059DBBF00C82D93 /* IntervalTimer Watch App Watch App.app */;
+			productType = "com.apple.product-type.application";
+		};
 		8BB018F630460AF400597EBD /* IntervalTimer */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 8BB0190230460AF900597EBD /* Build configuration list for PBXNativeTarget "IntervalTimer" */;
@@ -55,10 +120,12 @@
 				8BB018F330460AF400597EBD /* Sources */,
 				8BB018F430460AF400597EBD /* Frameworks */,
 				8BB018F530460AF400597EBD /* Resources */,
+				8B1047033059DBC100C82D93 /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				8B1046FE3059DBC100C82D93 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				8BB018F930460AF400597EBD /* IntervalTimer */,
@@ -80,6 +147,9 @@
 				LastSwiftUpdateCheck = 2630;
 				LastUpgradeCheck = 2630;
 				TargetAttributes = {
+					8B1046F43059DBBF00C82D93 = {
+						CreatedOnToolsVersion = 26.3;
+					};
 					8BB018F630460AF400597EBD = {
 						CreatedOnToolsVersion = 26.3;
 					};
@@ -100,11 +170,19 @@
 			projectRoot = "";
 			targets = (
 				8BB018F630460AF400597EBD /* IntervalTimer */,
+				8B1046F43059DBBF00C82D93 /* IntervalTimer Watch App Watch App */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		8B1046F33059DBBF00C82D93 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		8BB018F530460AF400597EBD /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -115,6 +193,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		8B1046F13059DBBF00C82D93 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		8BB018F330460AF400597EBD /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -124,7 +209,87 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		8B1046FE3059DBC100C82D93 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			platformFilter = ios;
+			target = 8B1046F43059DBBF00C82D93 /* IntervalTimer Watch App Watch App */;
+			targetProxy = 8B1046FD3059DBC100C82D93 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		8B1047013059DBC100C82D93 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "IntervalTimer Watch App Watch App/IntervalTimer Watch App Watch App.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 6D59TR44SY;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "IntervalTimer-Watch-App-Watch-App-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "IntervalTimer Watch App";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = TypewriterMunky.IntervalTimer;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = TypewriterMunky.IntervalTimer.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.2;
+			};
+			name = Debug;
+		};
+		8B1047023059DBC100C82D93 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "IntervalTimer Watch App Watch App/IntervalTimer Watch App Watch App.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 6D59TR44SY;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "IntervalTimer-Watch-App-Watch-App-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "IntervalTimer Watch App";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = TypewriterMunky.IntervalTimer;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = TypewriterMunky.IntervalTimer.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 26.2;
+			};
+			name = Release;
+		};
 		8BB0190030460AF900597EBD /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -332,6 +497,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		8B1047003059DBC100C82D93 /* Build configuration list for PBXNativeTarget "IntervalTimer Watch App Watch App" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8B1047013059DBC100C82D93 /* Debug */,
+				8B1047023059DBC100C82D93 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		8BB018F230460AF400597EBD /* Build configuration list for PBXProject "IntervalTimer" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

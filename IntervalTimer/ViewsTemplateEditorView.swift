@@ -92,6 +92,7 @@ struct TemplateEditorView: View {
                         .buttonStyle(.borderless)
                     }
                 }
+
             }
             
             ForEach(template.sortedBlocks) { block in
@@ -539,65 +540,102 @@ struct IntervalRowView: View {
     }
     
     var body: some View {
-        HStack {
-            // Nesting color indicator
-            if depth > 0 {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(rowColor.opacity(0.3))
-                    .frame(width: 3)
-            }
-            
-            if editingName {
-                TextField("Name", text: Binding(
-                    get: { interval.name },
-                    set: { interval.name = $0 }
-                ))
-                .textFieldStyle(.roundedBorder)
-                .onSubmit {
-                    editingName = false
-                    onChanged()
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                // Nesting color indicator
+                if depth > 0 {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(rowColor.opacity(0.3))
+                        .frame(width: 3)
                 }
-                .frame(maxWidth: 150)
-            } else {
-                Text(interval.name)
-                    .lineLimit(1)
-                    .onTapGesture {
-                        editingName = true
+                
+                if editingName {
+                    TextField("Name", text: Binding(
+                        get: { interval.name },
+                        set: { interval.name = $0 }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit {
+                        editingName = false
+                        onChanged()
                     }
+                    .frame(maxWidth: 150)
+                } else {
+                    Text(interval.name)
+                        .lineLimit(1)
+                        .onTapGesture {
+                            editingName = true
+                        }
+                }
+                
+                Spacer()
+                
+                Button {
+                    showingDurationPicker.toggle()
+                } label: {
+                    Text(formatDuration(interval.duration))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.bordered)
+                .popover(isPresented: $showingDurationPicker) {
+                    DurationPickerView(duration: Binding(
+                        get: { interval.duration },
+                        set: { interval.duration = $0; onChanged() }
+                    ))
+                    .padding()
+                    #if os(macOS)
+                    .frame(width: 320, height: 50)
+                    #endif
+                }
+                
+                Button(action: duplicateInterval) {
+                    Label("Duplicate", systemImage: "doc.on.doc")
+                        .labelStyle(.iconOnly)
+                }
+                .buttonStyle(.borderless)
+                
+                Button(role: .destructive, action: deleteInterval) {
+                    Label("Delete", systemImage: "trash")
+                        .labelStyle(.iconOnly)
+                }
+                .buttonStyle(.borderless)
             }
             
-            Spacer()
-            
-            Button {
-                showingDurationPicker.toggle()
-            } label: {
-                Text(formatDuration(interval.duration))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.bordered)
-            .popover(isPresented: $showingDurationPicker) {
-                DurationPickerView(duration: Binding(
-                    get: { interval.duration },
-                    set: { interval.duration = $0; onChanged() }
+            // Distance tracking
+            HStack {
+                Toggle("Track Distance", isOn: Binding(
+                    get: { interval.trackDistance },
+                    set: { interval.trackDistance = $0; onChanged() }
                 ))
-                .padding()
-                #if os(macOS)
-                .frame(width: 320, height: 50)
-                #endif
+                .font(.subheadline)
+                .toggleStyle(.switch)
             }
             
-            Button(action: duplicateInterval) {
-                Label("Duplicate", systemImage: "doc.on.doc")
-                    .labelStyle(.iconOnly)
+            if interval.trackDistance {
+                HStack {
+                    Text("Distance Goal")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    TextField("None", value: Binding(
+                        get: { interval.distanceGoal.map { $0 / 1609.34 } },
+                        set: {
+                            interval.distanceGoal = $0.map { $0 * 1609.34 }
+                            onChanged()
+                        }
+                    ), format: .number.precision(.fractionLength(1...2)))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 80)
+                    .multilineTextAlignment(.trailing)
+                    #if os(iOS)
+                    .keyboardType(.decimalPad)
+                    #endif
+                    Text("mi")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
             }
-            .buttonStyle(.borderless)
-            
-            Button(role: .destructive, action: deleteInterval) {
-                Label("Delete", systemImage: "trash")
-                    .labelStyle(.iconOnly)
-            }
-            .buttonStyle(.borderless)
         }
     }
     

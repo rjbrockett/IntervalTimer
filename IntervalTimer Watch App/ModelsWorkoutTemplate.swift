@@ -7,6 +7,7 @@ final class WorkoutTemplate {
     var name: String
     var createdAt: Date
     var updatedAt: Date
+    
     @Relationship(deleteRule: .cascade) 
     var blocks: [IntervalBlock]
     

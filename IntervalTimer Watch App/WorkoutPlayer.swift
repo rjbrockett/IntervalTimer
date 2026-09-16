@@ -6,8 +6,6 @@ struct PlaybackStep: Identifiable, Equatable {
     let name: String
     let duration: TimeInterval
     let originalIntervalID: UUID
-    let trackDistance: Bool
-    let distanceGoal: Double?  // in meters
     
     static func == (lhs: PlaybackStep, rhs: PlaybackStep) -> Bool {
         lhs.id == rhs.id
@@ -81,9 +79,7 @@ final class WorkoutPlayer {
                         id: UUID(),
                         name: interval.name,
                         duration: interval.duration,
-                        originalIntervalID: interval.id,
-                        trackDistance: interval.trackDistance,
-                        distanceGoal: interval.distanceGoal
+                        originalIntervalID: interval.id
                     )
                     steps.append(step)
                 }
