@@ -18,6 +18,7 @@ struct TemplateEditorView: View {
     @State private var editingTemplateName = false
     @State private var hasUnsavedChanges = false
     @State private var showingDiscardAlert = false
+    @State private var showingWorkoutSession = false
     
     // Child context for transactional editing
     @State private var childContext: ModelContext?
@@ -148,6 +149,22 @@ struct TemplateEditorView: View {
                 }
                 .disabled(!hasUnsavedChanges)
             }
+            
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    // Save any pending changes before starting
+                    if hasUnsavedChanges {
+                        saveChanges()
+                    }
+                    showingWorkoutSession = true
+                } label: {
+                    Label("Start Workout", systemImage: "play.fill")
+                }
+                .disabled(template.blocks.isEmpty)
+            }
+        }
+        .fullScreenCover(isPresented: $showingWorkoutSession) {
+            WorkoutSessionView(template: template)
         }
     }
     

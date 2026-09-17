@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		8B1047BC305C910A00C82D93 /* IntervalTimerWatch Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 8B1047B2305C910900C82D93 /* IntervalTimerWatch Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		8B1047BC305C910A00C82D93 /* IntervalTimerWatch Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 8B1047B2305C910900C82D93 /* IntervalTimerWatch Watch App.app */; platformFilters = (ios, xros, ); settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -224,6 +224,10 @@
 /* Begin PBXTargetDependency section */
 		8B1047BB305C910A00C82D93 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
+			platformFilters = (
+				ios,
+				xros,
+			);
 			target = 8B1047B1305C910900C82D93 /* IntervalTimerWatch Watch App */;
 			targetProxy = 8B1047BA305C910A00C82D93 /* PBXContainerItemProxy */;
 		};
