@@ -1,6 +1,170 @@
 import SwiftUI
 import SwiftData
 
+// MARK: - Numeric TextField with Done Button
+
+#if os(iOS)
+/// A text field for numeric input that shows a "Done" button above the keyboard.
+/// Uses UIKit's inputAccessoryView for a native look.
+struct NumericTextField: UIViewRepresentable {
+    @Binding var value: Int
+    var range: ClosedRange<Int> = 1...99
+    var keyboardType: UIKeyboardType = .numberPad
+    var onChanged: (() -> Void)?
+    
+    func makeUIView(context: Context) -> UITextField {
+        let textField = UITextField()
+        textField.textAlignment = .center
+        textField.borderStyle = .roundedRect
+        textField.keyboardType = keyboardType
+        textField.delegate = context.coordinator
+        textField.font = .systemFont(ofSize: 17)
+        
+        // Add Done button using UIToolbar as inputAccessoryView
+        let toolbar = UIToolbar()
+        toolbar.sizeToFit()
+        let flexSpace = UIBarButtonItem(
+            barButtonSystemItem: .flexibleSpace, target: nil, action: nil
+        )
+        let doneButton = UIBarButtonItem(
+            title: "Done",
+            style: .plain,
+            target: context.coordinator,
+            action: #selector(Coordinator.donePressed)
+        )
+        doneButton.setTitleTextAttributes(
+            [.font: UIFont.boldSystemFont(ofSize: 17)], for: .normal
+        )
+        toolbar.setItems([flexSpace, doneButton], animated: false)
+        textField.inputAccessoryView = toolbar
+        
+        return textField
+    }
+    
+    func updateUIView(_ textField: UITextField, context: Context) {
+        let newText = "\(value)"
+        if textField.text != newText {
+            textField.text = newText
+        }
+    }
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    class Coordinator: NSObject, UITextFieldDelegate {
+        let parent: NumericTextField
+        
+        init(_ parent: NumericTextField) {
+            self.parent = parent
+        }
+        
+        @objc func donePressed() {
+            UIApplication.shared.sendAction(
+                #selector(UIResponder.resignFirstResponder),
+                to: nil, from: nil, for: nil
+            )
+        }
+        
+        func textFieldDidEndEditing(_ textField: UITextField) {
+            if let text = textField.text, let num = Int(text) {
+                let clamped = max(parent.range.lowerBound, min(parent.range.upperBound, num))
+                if parent.value != clamped {
+                    parent.value = clamped
+                    parent.onChanged?()
+                }
+            } else {
+                textField.text = "\(parent.value)"
+            }
+        }
+        
+        func textField(_ textField: UITextField, shouldChangeCharactersIn range: NSRange, replacementString string: String) -> Bool {
+            let allowed = CharacterSet.decimalDigits
+            return string.unicodeScalars.allSatisfy { allowed.contains($0) } || string.isEmpty
+        }
+    }
+}
+
+/// A text field for decimal input (e.g. distance in miles) with a "Done" button.
+struct DecimalTextField: UIViewRepresentable {
+    @Binding var value: Double?
+    var placeholder: String = ""
+    var onChanged: (() -> Void)?
+    
+    func makeUIView(context: Context) -> UITextField {
+        let textField = UITextField()
+        textField.textAlignment = .right
+        textField.borderStyle = .roundedRect
+        textField.keyboardType = .decimalPad
+        textField.placeholder = placeholder
+        textField.delegate = context.coordinator
+        textField.font = .systemFont(ofSize: 17)
+        
+        let toolbar = UIToolbar()
+        toolbar.sizeToFit()
+        let flexSpace = UIBarButtonItem(
+            barButtonSystemItem: .flexibleSpace, target: nil, action: nil
+        )
+        let doneButton = UIBarButtonItem(
+            title: "Done",
+            style: .plain,
+            target: context.coordinator,
+            action: #selector(Coordinator.donePressed)
+        )
+        doneButton.setTitleTextAttributes(
+            [.font: UIFont.boldSystemFont(ofSize: 17)], for: .normal
+        )
+        toolbar.setItems([flexSpace, doneButton], animated: false)
+        textField.inputAccessoryView = toolbar
+        
+        return textField
+    }
+    
+    func updateUIView(_ textField: UITextField, context: Context) {
+        if !textField.isFirstResponder {
+            if let val = value {
+                textField.text = String(format: "%.2f", val)
+            } else {
+                textField.text = nil
+            }
+        }
+    }
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    class Coordinator: NSObject, UITextFieldDelegate {
+        let parent: DecimalTextField
+        
+        init(_ parent: DecimalTextField) {
+            self.parent = parent
+        }
+        
+        @objc func donePressed() {
+            UIApplication.shared.sendAction(
+                #selector(UIResponder.resignFirstResponder),
+                to: nil, from: nil, for: nil
+            )
+        }
+        
+        func textFieldDidEndEditing(_ textField: UITextField) {
+            if let text = textField.text, let num = Double(text), num > 0 {
+                parent.value = num
+            } else {
+                parent.value = nil
+            }
+            parent.onChanged?()
+        }
+        
+        func textField(_ textField: UITextField, shouldChangeCharactersIn range: NSRange, replacementString string: String) -> Bool {
+            let allowed = CharacterSet.decimalDigits.union(CharacterSet(charactersIn: "."))
+            return string.unicodeScalars.allSatisfy { allowed.contains($0) } || string.isEmpty
+        }
+    }
+}
+#endif
+
 private let maxNestingDepth = 4
 
 // Depth-based color for visual nesting
@@ -13,12 +177,15 @@ private func depthColor(_ depth: Int) -> Color {
 
 struct TemplateEditorView: View {
     @Environment(\.modelContext) private var parentContext
+    @Environment(\.dismiss) private var dismiss
     let template: WorkoutTemplate
     
     @State private var editingTemplateName = false
     @State private var hasUnsavedChanges = false
     @State private var showingDiscardAlert = false
     @State private var showingWorkoutSession = false
+    @State private var isEditing = false
+    @State private var showingDeleteConfirmation = false
     
     // Child context for transactional editing
     @State private var childContext: ModelContext?
@@ -64,43 +231,69 @@ struct TemplateEditorView: View {
     @ViewBuilder
     private func editorContent(for template: WorkoutTemplate) -> some View {
         List {
+            // Template name section
             Section {
-                HStack {
-                    if editingTemplateName {
-                        TextField("Template Name", text: Binding(
-                            get: { template.name },
-                            set: { template.name = $0; markChanged() }
-                        ))
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit {
-                            editingTemplateName = false
-                        }
-                    } else {
-                        Text(template.name)
-                            .font(.title2)
-                            .onTapGesture {
-                                editingTemplateName = true
+                if isEditing {
+                    HStack {
+                        if editingTemplateName {
+                            TextField("Routine Name", text: Binding(
+                                get: { template.name },
+                                set: { template.name = $0; markChanged() }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit {
+                                editingTemplateName = false
                             }
-                    }
-                    Spacer()
-                    if !editingTemplateName {
-                        Button {
-                            editingTemplateName = true
-                        } label: {
-                            Label("Edit", systemImage: "pencil")
-                                .labelStyle(.iconOnly)
+                        } else {
+                            Text(template.name)
+                                .font(.title2)
+                                .onTapGesture {
+                                    editingTemplateName = true
+                                }
                         }
-                        .buttonStyle(.borderless)
+                        Spacer()
+                        if !editingTemplateName {
+                            Button {
+                                editingTemplateName = true
+                            } label: {
+                                Label("Edit", systemImage: "pencil")
+                                    .labelStyle(.iconOnly)
+                            }
+                            .buttonStyle(.borderless)
+                        }
                     }
+                } else {
+                    Text(template.name)
+                        .font(.title2)
                 }
-
             }
             
+            // Heart Rate Zones toggle
+            Section {
+                if isEditing {
+                    Toggle("Show Heart Rate Zones", isOn: Binding(
+                        get: { template.showHeartRateZones },
+                        set: { template.showHeartRateZones = $0; markChanged() }
+                    ))
+                    .font(.subheadline)
+                } else if template.showHeartRateZones {
+                    HStack {
+                        Image(systemName: "heart.fill")
+                            .foregroundStyle(.red)
+                        Text("Heart Rate Zones Enabled")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            
+            // Blocks
             ForEach(template.sortedBlocks) { block in
                 BlockEditorSection(
                     block: block,
                     template: template,
                     depth: 0,
+                    isEditing: isEditing,
                     onChanged: markChanged
                 )
             }
@@ -112,59 +305,96 @@ struct TemplateEditorView: View {
                 }
                 markChanged()
             }
+            .moveDisabled(!isEditing)
             
-            Section {
-                Button(action: {
-                    let newBlock = IntervalBlock(
-                        name: "Block \(template.blocks.count + 1)",
-                        repeatCount: 1,
-                        sortOrder: template.blocks.count,
-                        intervals: []
-                    )
-                    template.blocks.append(newBlock)
-                    markChanged()
-                }) {
-                    Label("Add Block", systemImage: "plus.circle.fill")
+            // Add Block button (only in edit mode)
+            if isEditing {
+                Section {
+                    Button(action: {
+                        let newBlock = IntervalBlock(
+                            name: "Block \(template.blocks.count + 1)",
+                            repeatCount: 1,
+                            sortOrder: template.blocks.count,
+                            intervals: []
+                        )
+                        template.blocks.append(newBlock)
+                        markChanged()
+                    }) {
+                        Label("Add Block", systemImage: "plus.circle.fill")
+                    }
+                }
+                
+                // Delete routine button
+                Section {
+                    Button(role: .destructive) {
+                        showingDeleteConfirmation = true
+                    } label: {
+                        HStack {
+                            Spacer()
+                            Text("Delete Routine")
+                            Spacer()
+                        }
+                    }
                 }
             }
         }
-        .navigationTitle("Edit Template")
+        .navigationTitle(isEditing ? "Edit Routine" : template.name)
+        .navigationBarBackButtonHidden(isEditing)
+        .environment(\.editMode, isEditing ? .constant(.active) : .constant(.inactive))
+        .scrollDismissesKeyboard(.immediately)
         .toolbar {
-            #if os(iOS)
-            ToolbarItem(placement: .topBarTrailing) {
-                EditButton()
-            }
-            #endif
-            
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Save") {
-                    saveChanges()
-                }
-                .disabled(!hasUnsavedChanges)
-            }
-            
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Revert") {
-                    setupChildContext()
-                }
-                .disabled(!hasUnsavedChanges)
-            }
-            
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    // Save any pending changes before starting
-                    if hasUnsavedChanges {
-                        saveChanges()
+            if isEditing {
+                // Editing toolbar
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        if hasUnsavedChanges {
+                            saveChanges()
+                        }
+                        isEditing = false
+                        editingTemplateName = false
                     }
-                    showingWorkoutSession = true
-                } label: {
-                    Label("Start Workout", systemImage: "play.fill")
                 }
-                .disabled(template.blocks.isEmpty)
+                
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        setupChildContext()
+                        isEditing = false
+                        editingTemplateName = false
+                    }
+                }
+            } else {
+                // View mode toolbar
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        isEditing = true
+                    } label: {
+                        Label("Edit", systemImage: "pencil")
+                    }
+                }
+                
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showingWorkoutSession = true
+                    } label: {
+                        Label("Start Workout", systemImage: "play.fill")
+                    }
+                    .disabled(template.blocks.isEmpty)
+                }
             }
         }
         .fullScreenCover(isPresented: $showingWorkoutSession) {
             WorkoutSessionView(template: template)
+        }
+        .alert(
+            "Delete Routine",
+            isPresented: $showingDeleteConfirmation
+        ) {
+            Button("Delete", role: .destructive) {
+                deleteRoutine(template)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Are you sure you want to delete this routine? This cannot be undone.")
         }
     }
     
@@ -178,6 +408,12 @@ struct TemplateEditorView: View {
         try? childContext.save()
         hasUnsavedChanges = false
     }
+    
+    private func deleteRoutine(_ template: WorkoutTemplate) {
+        parentContext.delete(template)
+        try? parentContext.save()
+        dismiss()
+    }
 }
 
 // MARK: - Block Editor Section (recursive)
@@ -187,6 +423,7 @@ struct BlockEditorSection: View {
     @Bindable var block: IntervalBlock
     let template: WorkoutTemplate
     let depth: Int
+    let isEditing: Bool
     var onChanged: () -> Void
     
     @State private var isExpanded = true
@@ -198,51 +435,64 @@ struct BlockEditorSection: View {
     
     var body: some View {
         Section {
-            // Block controls
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    // Typeable repeat counter with stepper arrows
-                    HStack(spacing: 2) {
-                        Text("Repeat:")
-                            .foregroundStyle(.secondary)
+            if isEditing {
+                // Edit mode: full controls
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        HStack(spacing: 2) {
+                            Text("Repeat:")
+                                .foregroundStyle(.secondary)
+                            
+                            #if os(iOS)
+                            NumericTextField(
+                                value: Binding(
+                                    get: { block.repeatCount },
+                                    set: { block.repeatCount = $0 }
+                                ),
+                                range: 1...99,
+                                onChanged: onChanged
+                            )
+                            .frame(width: 45, height: 34)
+                            #else
+                            TextField("", value: Binding(
+                                get: { block.repeatCount },
+                                set: { newVal in
+                                    block.repeatCount = max(1, min(99, newVal))
+                                    onChanged()
+                                }
+                            ), format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 45)
+                            .multilineTextAlignment(.center)
+                            #endif
+                            
+                            Stepper("", value: Binding(
+                                get: { block.repeatCount },
+                                set: { newVal in
+                                    block.repeatCount = max(1, min(99, newVal))
+                                    onChanged()
+                                }
+                            ), in: 1...99)
+                            .labelsHidden()
+                        }
                         
-                        TextField("", value: Binding(
-                            get: { block.repeatCount },
-                            set: { newVal in
-                                block.repeatCount = max(1, min(99, newVal))
-                                onChanged()
-                            }
-                        ), format: .number)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 45)
-                        .multilineTextAlignment(.center)
+                        Spacer()
                         
-                        Stepper("", value: Binding(
-                            get: { block.repeatCount },
-                            set: { newVal in
-                                block.repeatCount = max(1, min(99, newVal))
-                                onChanged()
-                            }
-                        ), in: 1...99)
-                        .labelsHidden()
+                        Button(action: duplicateBlock) {
+                            Label("Duplicate Block", systemImage: "doc.on.doc")
+                                .labelStyle(.iconOnly)
+                        }
+                        .buttonStyle(.borderless)
+                        
+                        Button(role: .destructive, action: deleteBlock) {
+                            Label("Delete Block", systemImage: "trash")
+                                .labelStyle(.iconOnly)
+                        }
+                        .buttonStyle(.borderless)
                     }
-                    
-                    Spacer()
-                    
-                    Button(action: duplicateBlock) {
-                        Label("Duplicate Block", systemImage: "doc.on.doc")
-                            .labelStyle(.iconOnly)
-                    }
-                    .buttonStyle(.borderless)
-                    
-                    Button(role: .destructive, action: deleteBlock) {
-                        Label("Delete Block", systemImage: "trash")
-                            .labelStyle(.iconOnly)
-                    }
-                    .buttonStyle(.borderless)
                 }
+                .padding(.vertical, 4)
             }
-            .padding(.vertical, 4)
             
             // Content: intervals and/or child blocks
             if isExpanded {
@@ -253,12 +503,14 @@ struct BlockEditorSection: View {
                         block: block,
                         template: template,
                         depth: depth,
+                        isEditing: isEditing,
                         onChanged: onChanged
                     )
                 }
                 .onMove { source, destination in
                     moveIntervals(from: source, to: destination)
                 }
+                .moveDisabled(!isEditing)
                 
                 // Child blocks
                 ForEach(block.sortedChildBlocks) { childBlock in
@@ -266,29 +518,33 @@ struct BlockEditorSection: View {
                         block: childBlock,
                         template: template,
                         depth: depth + 1,
+                        isEditing: isEditing,
                         onChanged: onChanged
                     )
                 }
                 .onMove { source, destination in
                     moveChildBlocks(from: source, to: destination)
                 }
+                .moveDisabled(!isEditing)
                 
-                // Add buttons
-                HStack {
-                    Button(action: addInterval) {
-                        Label("Add Interval", systemImage: "plus.circle")
-                    }
-                    
-                    if depth < maxNestingDepth {
-                        Button(action: addChildBlock) {
-                            Label("Add Sub-Block", systemImage: "folder.badge.plus")
+                // Add buttons (edit mode only)
+                if isEditing {
+                    HStack {
+                        Button(action: addInterval) {
+                            Label("Add Interval", systemImage: "plus.circle")
+                        }
+                        
+                        if depth < maxNestingDepth {
+                            Button(action: addChildBlock) {
+                                Label("Add Sub-Block", systemImage: "folder.badge.plus")
+                            }
                         }
                     }
                 }
             }
         } header: {
             HStack {
-                if editingBlockName {
+                if editingBlockName && isEditing {
                     TextField("Block Name", text: Binding(
                         get: { block.name ?? "" },
                         set: { block.name = $0.isEmpty ? nil : $0 }
@@ -306,6 +562,11 @@ struct BlockEditorSection: View {
                             Text(block.name ?? "Unnamed Block")
                                 .font(.headline)
                                 .fontWeight(.bold)
+                            if block.repeatCount > 1 {
+                                Text("×\(block.repeatCount)")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
                             if block.isGroup {
                                 Image(systemName: "arrow.triangle.2.circlepath")
                                     .font(.caption)
@@ -318,13 +579,15 @@ struct BlockEditorSection: View {
                     .buttonStyle(.plain)
                 }
                 
-                Button {
-                    editingBlockName.toggle()
-                } label: {
-                    Label("Rename", systemImage: "pencil")
-                        .labelStyle(.iconOnly)
+                if isEditing {
+                    Button {
+                        editingBlockName.toggle()
+                    } label: {
+                        Label("Rename", systemImage: "pencil")
+                            .labelStyle(.iconOnly)
+                    }
+                    .buttonStyle(.borderless)
                 }
-                .buttonStyle(.borderless)
             }
         }
         // Visual distinction for sub-blocks: indentation + colored left border
@@ -547,6 +810,7 @@ struct IntervalRowView: View {
     let block: IntervalBlock
     let template: WorkoutTemplate
     let depth: Int
+    let isEditing: Bool
     var onChanged: () -> Void
     
     @State private var editingName = false
@@ -557,9 +821,50 @@ struct IntervalRowView: View {
     }
     
     var body: some View {
+        if isEditing {
+            editingBody
+        } else {
+            viewBody
+        }
+    }
+    
+    // MARK: - View Mode (read-only)
+    
+    private var viewBody: some View {
+        HStack {
+            if depth > 0 {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(rowColor.opacity(0.3))
+                    .frame(width: 3)
+            }
+            
+            Text(interval.name)
+                .lineLimit(1)
+            
+            Spacer()
+            
+            Text(formatDuration(interval.duration))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+            
+            if interval.trackDistance {
+                Image(systemName: "figure.run")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+                if let goal = interval.distanceGoal, goal > 0 {
+                    Text(String(format: "%.1f mi", goal / 1609.34))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+    
+    // MARK: - Edit Mode
+    
+    private var editingBody: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                // Nesting color indicator
                 if depth > 0 {
                     RoundedRectangle(cornerRadius: 2)
                         .fill(rowColor.opacity(0.3))
@@ -635,6 +940,17 @@ struct IntervalRowView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Spacer()
+                    #if os(iOS)
+                    DecimalTextField(
+                        value: Binding(
+                            get: { interval.distanceGoal.map { $0 / 1609.34 } },
+                            set: { interval.distanceGoal = $0.map { $0 * 1609.34 } }
+                        ),
+                        placeholder: "None",
+                        onChanged: onChanged
+                    )
+                    .frame(width: 80, height: 34)
+                    #else
                     TextField("None", value: Binding(
                         get: { interval.distanceGoal.map { $0 / 1609.34 } },
                         set: {
@@ -645,8 +961,6 @@ struct IntervalRowView: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 80)
                     .multilineTextAlignment(.trailing)
-                    #if os(iOS)
-                    .keyboardType(.decimalPad)
                     #endif
                     Text("mi")
                         .font(.subheadline)

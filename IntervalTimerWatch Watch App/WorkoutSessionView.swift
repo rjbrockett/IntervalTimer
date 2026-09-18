@@ -2,31 +2,46 @@ import SwiftUI
 
 struct WorkoutSessionView: View {
     let template: WorkoutTemplate
-    @Binding var isPresented: Bool
+    @Environment(\.dismiss) private var dismiss
 
     @State private var player: WorkoutPlayer
     @State private var healthKit = HealthKitManager()
     @State private var showingPauseOverlay = false
-    @State private var dragOffset: CGSize = .zero
     @State private var showingAuthError = false
 
-    init(template: WorkoutTemplate, isPresented: Binding<Bool>) {
+    init(template: WorkoutTemplate) {
         self.template = template
-        self._isPresented = isPresented
         self._player = State(initialValue: WorkoutPlayer(template: template))
+    }
+
+    /// The background color based on current heart rate zone
+    private var zoneBackgroundColor: Color {
+        guard template.showHeartRateZones,
+              let zone = healthKit.currentHeartRateZone else {
+            return .clear
+        }
+        let c = zone.color
+        return Color(red: c.red, green: c.green, blue: c.blue).opacity(0.3)
     }
 
     var body: some View {
         ZStack {
+            // Heart rate zone background
+            if template.showHeartRateZones {
+                zoneBackgroundColor
+                    .ignoresSafeArea()
+                    .animation(.easeInOut(duration: 0.5), value: healthKit.currentHeartRateZone?.rawValue)
+            }
+
             // Main workout display
             mainWorkoutView
-                .gesture(swipeGesture)
 
             // Pause overlay
             if showingPauseOverlay {
                 pauseOverlay
             }
         }
+        .toolbar(.hidden, for: .navigationBar)
         .onAppear {
             startWorkout()
         }
@@ -37,7 +52,7 @@ struct WorkoutSessionView: View {
         }
         .alert("HealthKit Not Authorized", isPresented: $showingAuthError) {
             Button("OK") {
-                isPresented = false
+                dismiss()
             }
         } message: {
             Text("Please authorize HealthKit access in Settings to track your workout.")
@@ -48,80 +63,93 @@ struct WorkoutSessionView: View {
 
     private var mainWorkoutView: some View {
         TabView {
-            // Primary metrics page — scrollable
-            ScrollView {
-                VStack(spacing: 8) {
+            // Primary metrics page
+            VStack(spacing: 2) {
+                // Heart rate zone label (top-left)
+                if template.showHeartRateZones {
+                    HStack {
+                        if let zone = healthKit.currentHeartRateZone {
+                            Text(zone.name.uppercased())
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.9))
+                        } else {
+                            Text("—")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.5))
+                        }
+                        Spacer()
+                    }
+                }
+
+                // Current interval name
+                Text(player.currentStepName)
+                    .font(.callout)
+                    .fontWeight(.semibold)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+
+                // Countdown timer
+                Text(formatTimeRemaining(player.currentStepTimeRemaining))
+                    .font(.system(size: 48, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(countdownColor)
+
+                // Distance (conditional)
+                if player.currentStep?.trackDistance == true {
+                    distanceView
+                }
+
+                // Info row: heart rate | elapsed | step counter
+                HStack(spacing: 8) {
+                    // Heart rate
+                    HStack(spacing: 2) {
+                        Image(systemName: "heart.fill")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.red)
+                        Text("\(healthKit.currentHeartRate)")
+                            .font(.system(size: 11, weight: .semibold))
+                            .monospacedDigit()
+                    }
+
+                    Text("·")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+
                     // Elapsed time
                     Text(formatElapsedTime(player.elapsedTotal))
-                        .font(.system(size: 32, weight: .bold, design: .rounded))
+                        .font(.system(size: 11, weight: .medium))
                         .monospacedDigit()
                         .foregroundStyle(.yellow)
 
-                    // Current interval name + time remaining
-                    VStack(spacing: 2) {
-                        Text(player.currentStepName)
-                            .font(.headline)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                        Text(formatTimeRemaining(player.currentStepTimeRemaining))
-                            .font(.system(size: 36, weight: .bold, design: .rounded))
-                            .monospacedDigit()
-                            .foregroundStyle(.orange)
-                    }
+                    Text("·")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
 
-                    Divider()
-
-                    // Next interval
-                    HStack {
-                        Text("NEXT")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        Text(player.nextStepName ?? "Last Step")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                            .foregroundStyle(player.nextStepName == nil ? .secondary : .primary)
-                            .lineLimit(1)
-                    }
-
-                    Divider()
-
-                    // Metrics row: heart rate + interval count
-                    HStack(spacing: 16) {
-                        // Heart rate
-                        VStack(spacing: 2) {
-                            Image(systemName: "heart.fill")
-                                .font(.caption)
-                                .foregroundStyle(.red)
-                            Text("\(healthKit.currentHeartRate)")
-                                .font(.title3)
-                                .fontWeight(.semibold)
-                                .monospacedDigit()
-                        }
-
-                        Divider()
-                            .frame(height: 30)
-
-                        // Interval count
-                        VStack(spacing: 2) {
-                            Text("STEP")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                            Text("\(player.currentStepIndex + 1)/\(player.totalSteps)")
-                                .font(.title3)
-                                .fontWeight(.semibold)
-                                .monospacedDigit()
-                        }
-                    }
-
-                    // Distance (conditional — based on current step's block setting)
-                    if player.currentStep?.trackDistance == true {
-                        Divider()
-                        distanceView
-                    }
+                    // Step counter
+                    Text("\(player.currentStepIndex + 1)/\(player.totalSteps)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
                 }
-                .padding(.horizontal)
-                .padding(.top, 4)
+
+                // Next interval
+                HStack(spacing: 4) {
+                    Text("NEXT")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                    Text(player.nextStepName ?? "Last Step")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(player.nextStepName == nil ? .secondary : .primary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+
+                // Control buttons
+                controlButtons
             }
+            .padding(.horizontal, 8)
+            .padding(.top, 2)
+            .padding(.bottom, 4)
 
             // Secondary metrics page
             ScrollView {
@@ -158,14 +186,20 @@ struct WorkoutSessionView: View {
                         }
                     }
 
-                    // Distance detail (if any block tracks distance)
-                    if anyBlockTracksDistance {
-                        Divider()
-                        VStack(spacing: 2) {
-                            Text("DISTANCE")
-                                .font(.caption2)
+                    Divider()
+
+                    // Total distance
+                    VStack(spacing: 2) {
+                        Text("DISTANCE")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        HStack(alignment: .firstTextBaseline, spacing: 4) {
+                            Text(String(format: "%.2f", healthKit.distanceWalkingRunning / 1609.34))
+                                .font(.system(size: 40, weight: .bold, design: .rounded))
+                                .monospacedDigit()
+                            Text("MI")
+                                .font(.caption)
                                 .foregroundStyle(.secondary)
-                            distanceDetailView
                         }
                     }
 
@@ -189,14 +223,70 @@ struct WorkoutSessionView: View {
         .tabViewStyle(.page)
     }
 
-    // MARK: - Distance Views
+    // MARK: - Control Buttons
 
-    /// Whether any interval in this template has distance tracking enabled
-    private var anyBlockTracksDistance: Bool {
-        template.blocks.contains { block in
-            block.intervals.contains { $0.trackDistance }
+    private var controlButtons: some View {
+        HStack(spacing: 12) {
+            // Previous
+            Button {
+                player.skipToPrevious()
+            } label: {
+                Image(systemName: "backward.fill")
+                    .font(.system(size: 14))
+                    .frame(width: 36, height: 36)
+            }
+            .buttonStyle(.bordered)
+            .tint(.secondary)
+
+            // Play / Pause
+            Button {
+                if player.state == .running {
+                    player.pause()
+                    healthKit.pauseWorkout()
+                    withAnimation {
+                        showingPauseOverlay = true
+                    }
+                } else if player.state == .paused {
+                    player.resume()
+                    healthKit.resumeWorkout()
+                    withAnimation {
+                        showingPauseOverlay = false
+                    }
+                }
+            } label: {
+                Image(systemName: player.state == .running ? "pause.fill" : "play.fill")
+                    .font(.system(size: 18))
+                    .frame(width: 44, height: 36)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(player.state == .running ? .orange : .green)
+
+            // Next
+            Button {
+                player.skipToNext()
+            } label: {
+                Image(systemName: "forward.fill")
+                    .font(.system(size: 14))
+                    .frame(width: 36, height: 36)
+            }
+            .buttonStyle(.bordered)
+            .tint(.secondary)
         }
     }
+
+    // MARK: - Countdown Color
+
+    private var countdownColor: Color {
+        let remaining = player.currentStepTimeRemaining
+        if remaining <= 3 {
+            return .red
+        } else if remaining <= 10 {
+            return .orange
+        }
+        return .orange
+    }
+
+    // MARK: - Distance Views
 
     /// The distance goal from the current step's block, if any
     private var currentDistanceGoal: Double? {
@@ -225,36 +315,6 @@ struct WorkoutSessionView: View {
         }
     }
 
-    @ViewBuilder
-    private var distanceDetailView: some View {
-        let miles = healthKit.distanceWalkingRunning / 1609.34
-        // Use the first interval's goal that has one, for the detail view
-        let goal = template.blocks
-            .flatMap(\.intervals)
-            .compactMap(\.distanceGoal)
-            .first { $0 > 0 }
-        if let goal {
-            let goalMiles = goal / 1609.34
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(String(format: "%.2f", miles))
-                    .font(.system(size: 36, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                Text(String(format: "/ %.2f mi", goalMiles))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        } else {
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(String(format: "%.2f", miles))
-                    .font(.system(size: 36, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                Text("MI")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
     // MARK: - Pause Overlay
 
     private var pauseOverlay: some View {
@@ -262,52 +322,32 @@ struct WorkoutSessionView: View {
             Color.black.opacity(0.95)
                 .ignoresSafeArea()
 
-            VStack(spacing: 20) {
+            VStack(spacing: 16) {
                 Text("PAUSED")
-                    .font(.title2)
+                    .font(.title3)
                     .fontWeight(.bold)
                     .foregroundStyle(.orange)
 
-                Divider()
-
-                VStack(spacing: 12) {
-                    Button(action: {
-                        player.skipToPrevious()
-                    }) {
-                        Label("Previous", systemImage: "backward.fill")
-                            .frame(maxWidth: .infinity)
+                Button(action: {
+                    player.resume()
+                    healthKit.resumeWorkout()
+                    withAnimation {
+                        showingPauseOverlay = false
                     }
-                    .buttonStyle(.bordered)
-
-                    Button(action: {
-                        player.skipToNext()
-                    }) {
-                        Label("Next", systemImage: "forward.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-
-                    Button(action: {
-                        player.resume()
-                        healthKit.resumeWorkout()
-                        withAnimation {
-                            showingPauseOverlay = false
-                        }
-                    }) {
-                        Label("Resume", systemImage: "play.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.green)
-
-                    Button(role: .destructive, action: {
-                        player.end()
-                    }) {
-                        Label("End Workout", systemImage: "stop.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
+                }) {
+                    Label("Resume", systemImage: "play.fill")
+                        .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+
+                Button(role: .destructive, action: {
+                    player.end()
+                }) {
+                    Label("End Workout", systemImage: "stop.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
             }
             .padding()
         }
@@ -315,24 +355,6 @@ struct WorkoutSessionView: View {
     }
 
     // MARK: - Gestures
-
-    private var swipeGesture: some Gesture {
-        DragGesture(minimumDistance: 30)
-            .onChanged { value in
-                dragOffset = value.translation
-            }
-            .onEnded { value in
-                if value.translation.width > 50 && player.state == .running {
-                    // Swipe right -> pause
-                    player.pause()
-                    healthKit.pauseWorkout()
-                    withAnimation {
-                        showingPauseOverlay = true
-                    }
-                }
-                dragOffset = .zero
-            }
-    }
 
     private var resumeSwipeGesture: some Gesture {
         DragGesture(minimumDistance: 30)
@@ -368,12 +390,12 @@ struct WorkoutSessionView: View {
             do {
                 try await healthKit.endWorkout()
                 await MainActor.run {
-                    isPresented = false
+                    dismiss()
                 }
             } catch {
                 print("Failed to end workout: \(error)")
                 await MainActor.run {
-                    isPresented = false
+                    dismiss()
                 }
             }
         }
@@ -413,7 +435,6 @@ struct WorkoutSessionView: View {
                     ]
                 )
             ]
-        ),
-        isPresented: .constant(true)
+        )
     )
 }

@@ -3,12 +3,14 @@ import SwiftData
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
-    @Query(sort: \WorkoutTemplate.updatedAt, order: .reverse) 
+    @Query(sort: \WorkoutTemplate.sortOrder) 
     private var templates: [WorkoutTemplate]
     
     @State private var selectedTemplate: WorkoutTemplate?
     @State private var showingAddTemplate = false
     @State private var newTemplateName = ""
+    @State private var templateToDelete: WorkoutTemplate?
+    @State private var showingDeleteConfirmation = false
     
     var body: some View {
         NavigationSplitView {
@@ -17,7 +19,7 @@ struct ContentView: View {
             if let template = selectedTemplate {
                 TemplateEditorView(template: template)
             } else {
-                Text("Select a template")
+                Text("Select a routine")
                     .foregroundStyle(.secondary)
             }
         }
@@ -35,16 +37,6 @@ struct ContentView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                .swipeActions(edge: .trailing) {
-                    Button(role: .destructive) {
-                        if selectedTemplate?.id == template.id {
-                            selectedTemplate = nil
-                        }
-                        modelContext.delete(template)
-                    } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-                }
                 #if os(macOS)
                 .contextMenu {
                     Button {
@@ -56,22 +48,34 @@ struct ContentView: View {
                     Divider()
                     
                     Button(role: .destructive) {
-                        if selectedTemplate?.id == template.id {
-                            selectedTemplate = nil
-                        }
-                        modelContext.delete(template)
+                        templateToDelete = template
+                        showingDeleteConfirmation = true
                     } label: {
                         Label("Delete", systemImage: "trash")
                     }
                 }
                 #endif
             }
+            .onDelete { indexSet in
+                if let index = indexSet.first {
+                    templateToDelete = templates[index]
+                    showingDeleteConfirmation = true
+                }
+            }
+            .onMove { source, destination in
+                // Build a mutable sorted list, move, then reassign sortOrder
+                var ordered = templates.sorted { $0.sortOrder < $1.sortOrder }
+                ordered.move(fromOffsets: source, toOffset: destination)
+                for (index, t) in ordered.enumerated() {
+                    t.sortOrder = index
+                }
+            }
         }
-        .navigationTitle("Templates")
+        .navigationTitle("Routines")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button(action: { showingAddTemplate = true }) {
-                    Label("Add Template", systemImage: "plus")
+                    Label("Add Routine", systemImage: "plus")
                 }
             }
             
@@ -84,9 +88,36 @@ struct ContentView: View {
         .sheet(isPresented: $showingAddTemplate) {
             addTemplateSheet
         }
+        .alert(
+            "Delete Routine",
+            isPresented: $showingDeleteConfirmation
+        ) {
+            Button("Delete", role: .destructive) {
+                if let template = templateToDelete {
+                    if selectedTemplate?.id == template.id {
+                        selectedTemplate = nil
+                    }
+                    modelContext.delete(template)
+                    templateToDelete = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                templateToDelete = nil
+            }
+        } message: {
+            Text("Are you sure you want to delete this routine? This cannot be undone.")
+        }
         .onAppear {
             if templates.isEmpty {
                 seedSampleData()
+            } else {
+                // Assign sort orders to existing templates that don't have them
+                let allZero = templates.allSatisfy { $0.sortOrder == 0 } && templates.count > 1
+                if allZero {
+                    for (index, t) in templates.enumerated() {
+                        t.sortOrder = index
+                    }
+                }
             }
         }
     }
@@ -94,9 +125,9 @@ struct ContentView: View {
     private var addTemplateSheet: some View {
         NavigationStack {
             Form {
-                TextField("Template Name", text: $newTemplateName)
+                TextField("Routine Name", text: $newTemplateName)
             }
-            .navigationTitle("New Template")
+            .navigationTitle("New Routine")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -121,7 +152,7 @@ struct ContentView: View {
     }
     
     private func addTemplate() {
-        let template = WorkoutTemplate(name: newTemplateName)
+        let template = WorkoutTemplate(name: newTemplateName, sortOrder: templates.count)
         modelContext.insert(template)
         
         showingAddTemplate = false
@@ -171,6 +202,7 @@ struct ContentView: View {
         
         let template1 = WorkoutTemplate(
             name: "5x Sprint Intervals",
+            sortOrder: 0,
             blocks: [warmup, mainSet, cooldown]
         )
         
@@ -187,6 +219,7 @@ struct ContentView: View {
         
         let template2 = WorkoutTemplate(
             name: "Tabata 4 Minutes",
+            sortOrder: 1,
             blocks: [tabata]
         )
         
@@ -217,6 +250,7 @@ struct ContentView: View {
         )
         let template3 = WorkoutTemplate(
             name: "3x HIIT Circuit",
+            sortOrder: 2,
             blocks: [circuit]
         )
         
