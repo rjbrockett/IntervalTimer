@@ -6,6 +6,18 @@ struct WorkoutSessionView: View {
     
     @State private var player: WorkoutPlayer
     @State private var showingEndConfirmation = false
+    @State private var locationManager = LocationManager()
+    
+    /// Whether any interval in this template tracks distance
+    private var anyIntervalTracksDistance: Bool {
+        template.blocks.contains { block in
+            block.intervals.contains { $0.trackDistance }
+        }
+    }
+    
+    private var distanceMiles: Double {
+        locationManager.totalDistanceMiles
+    }
     
     init(template: WorkoutTemplate) {
         self.template = template
@@ -48,8 +60,14 @@ struct WorkoutSessionView: View {
             .padding()
         }
         .background(Color(.systemBackground))
+        .onAppear {
+            if anyIntervalTracksDistance {
+                locationManager.startTracking()
+            }
+        }
         .onChange(of: player.state) { _, newState in
             if newState == .ended {
+                locationManager.stopTracking()
                 dismiss()
             }
         }
@@ -124,19 +142,21 @@ struct WorkoutSessionView: View {
     
     private var distanceSection: some View {
         VStack(spacing: 4) {
-            HStack(spacing: 6) {
-                Image(systemName: "figure.run")
-                    .foregroundStyle(.green)
-                if let goal = player.currentStep?.distanceGoal, goal > 0 {
-                    let goalMiles = goal / 1609.34
-                    Text(String(format: "Goal: %.2f mi", goalMiles))
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("Distance Tracking")
-                        .foregroundStyle(.secondary)
-                }
+            Image(systemName: "figure.run")
+                .font(.title3)
+                .foregroundStyle(.green)
+            if let goal = player.currentStep?.distanceGoal, goal > 0 {
+                let goalMiles = goal / 1609.34
+                Text(String(format: "%.2f / %.2f mi", distanceMiles, goalMiles))
+                    .font(.title3)
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+            } else {
+                Text(String(format: "%.2f mi", distanceMiles))
+                    .font(.title3)
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
             }
-            .font(.subheadline)
         }
     }
     
