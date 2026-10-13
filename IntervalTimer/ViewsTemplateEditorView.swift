@@ -937,16 +937,12 @@ struct BlockEditorRow: View {
             } action: { minY in
                 onHeaderPosition(block.id, minY)
             }
-            .simultaneousGesture(
-                LongPressGesture(minimumDuration: 0.5)
-                    .onEnded { _ in
-                        if isEditing {
-                            onDragStarted(block.id)
-                        }
-                    }
-            )
         }
         .padding(.leading, CGFloat(depth) * 4)
+        .onDrag {
+            onDragStarted(block.id)
+            return NSItemProvider(object: block.id.uuidString as NSString)
+        }
         .onChange(of: allCollapsed) { _, collapsed in
             isExpanded = !collapsed
         }
