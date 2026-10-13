@@ -88,11 +88,18 @@ struct WorkoutSessionView: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
 
-                // Countdown timer
-                Text(formatTimeRemaining(player.currentStepTimeRemaining))
-                    .font(.system(size: 48, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(countdownColor)
+                // Countdown timer (or elapsed time for untimed steps)
+                if player.isCurrentStepUntimed {
+                    Text(formatTimeRemaining(player.currentStepElapsed))
+                        .font(.system(size: 48, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(formatTimeRemaining(player.currentStepTimeRemaining))
+                        .font(.system(size: 48, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(countdownColor)
+                }
 
                 // Distance (conditional)
                 if player.currentStep?.trackDistance == true {

@@ -121,11 +121,22 @@ struct WorkoutSessionView: View {
     // MARK: - Countdown
     
     private var countdownSection: some View {
-        Text(formatCountdown(player.currentStepTimeRemaining))
-            .font(.system(size: 80, weight: .bold, design: .rounded))
-            .monospacedDigit()
-            .foregroundStyle(countdownColor)
-            .contentTransition(.numericText())
+        Group {
+            if player.isCurrentStepUntimed {
+                // Untimed: show elapsed time counting up
+                Text(formatCountdown(player.currentStepElapsed))
+                    .font(.system(size: 80, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .contentTransition(.numericText())
+            } else {
+                Text(formatCountdown(player.currentStepTimeRemaining))
+                    .font(.system(size: 80, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(countdownColor)
+                    .contentTransition(.numericText())
+            }
+        }
     }
     
     private var countdownColor: Color {

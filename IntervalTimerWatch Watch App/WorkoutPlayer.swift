@@ -62,21 +62,14 @@ final class WorkoutPlayer {
         return steps
     }
     
-    /// Recursively flatten a single block (handles nesting)
+    /// Recursively flatten a single block (handles nesting and intermingled intervals/sub-blocks)
     private static func flattenBlock(_ block: IntervalBlock) -> [PlaybackStep] {
         var steps: [PlaybackStep] = []
         
         for _ in 0..<block.repeatCount {
-            if !block.childBlocks.isEmpty {
-                // Group block: recurse into sorted child blocks
-                let sortedChildren = block.childBlocks.sorted { $0.sortOrder < $1.sortOrder }
-                for child in sortedChildren {
-                    steps.append(contentsOf: flattenBlock(child))
-                }
-            } else {
-                // Leaf block: iterate its intervals
-                let sortedIntervals = block.intervals.sorted { $0.sortOrder < $1.sortOrder }
-                for interval in sortedIntervals {
+            for child in block.sortedChildren {
+                switch child {
+                case .interval(let interval):
                     let step = PlaybackStep(
                         id: UUID(),
                         name: interval.name,
@@ -86,6 +79,8 @@ final class WorkoutPlayer {
                         distanceGoal: interval.distanceGoal
                     )
                     steps.append(step)
+                case .childBlock(let childBlock):
+                    steps.append(contentsOf: flattenBlock(childBlock))
                 }
             }
         }
@@ -119,7 +114,8 @@ final class WorkoutPlayer {
         currentStepElapsed = now.timeIntervalSince(stepStart)
         
         // Auto-advance to next step if current step duration is exceeded
-        if let currentStep = currentStep, currentStepElapsed >= currentStep.duration {
+        // Steps with duration 0 are untimed — only advanced manually via skipToNext()
+        if let currentStep = currentStep, currentStep.duration > 0, currentStepElapsed >= currentStep.duration {
             autoAdvanceToNextStep()
         }
     }
@@ -210,7 +206,14 @@ final class WorkoutPlayer {
     
     var currentStepTimeRemaining: TimeInterval {
         guard let step = currentStep else { return 0 }
+        if step.duration <= 0 { return 0 }
         return max(0, step.duration - currentStepElapsed)
+    }
+
+    /// Whether the current step is untimed (manual advance only)
+    var isCurrentStepUntimed: Bool {
+        guard let step = currentStep else { return false }
+        return step.duration <= 0
     }
     
     var totalSteps: Int {

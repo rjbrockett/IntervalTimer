@@ -20,8 +20,10 @@ struct WatchContentView: View {
             WorkoutSessionView(template: template)
         }
         .onAppear {
-            if templates.isEmpty {
+            let hasSeeded = UserDefaults.standard.bool(forKey: "hasSeededSampleData")
+            if !hasSeeded && templates.isEmpty {
                 seedSampleTemplates()
+                UserDefaults.standard.set(true, forKey: "hasSeededSampleData")
             }
         }
     }
@@ -113,11 +115,24 @@ struct WatchContentView: View {
                     selectedTemplate = template
                 }) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(template.name)
-                            .font(.headline)
-                        Text("\(template.blocks.count) block\(template.blocks.count == 1 ? "" : "s")")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        HStack(spacing: 4) {
+                            Text(template.name)
+                                .font(.headline)
+                            if template.isDownloaded == true {
+                                Image(systemName: "arrow.down.circle.fill")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        if template.isDownloaded == true, let creator = template.creatorName {
+                            Text("by \(creator)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("\(template.blocks.count) block\(template.blocks.count == 1 ? "" : "s")")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
             }

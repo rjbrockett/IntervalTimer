@@ -3,7 +3,118 @@ import SwiftData
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
-    @Query(sort: \WorkoutTemplate.sortOrder) 
+    @Binding var pendingImportRecordName: String?
+    
+    @State private var selectedTab = 0
+    @State private var showingImportAlert = false
+    @State private var importAlertMessage = ""
+    @State private var importingRoutineName: String?
+    @State private var pendingPayload: SharedRoutinePayload?
+    @State private var pendingRecordName: String?
+    @State private var isImporting = false
+    
+    var body: some View {
+        TabView(selection: $selectedTab) {
+            MyRoutinesView()
+                .tabItem {
+                    Label("My Routines", systemImage: "list.bullet")
+                }
+                .tag(0)
+            
+            DownloadedRoutinesView()
+                .tabItem {
+                    Label("Downloaded", systemImage: "arrow.down.circle")
+                }
+                .tag(1)
+        }
+        .onChange(of: pendingImportRecordName) { _, recordName in
+            if let recordName {
+                Task {
+                    await handleImport(recordName: recordName)
+                }
+            }
+        }
+        .alert("Download Routine", isPresented: $showingImportAlert) {
+            if let payload = pendingPayload, let recordName = pendingRecordName {
+                Button("Download") {
+                    performImport(payload: payload, recordName: recordName)
+                }
+                Button("Cancel", role: .cancel) {
+                    clearImportState()
+                }
+            } else {
+                Button("OK") {
+                    clearImportState()
+                }
+            }
+        } message: {
+            Text(importAlertMessage)
+        }
+    }
+    
+    private func handleImport(recordName: String) async {
+        let service = CloudKitSharingService()
+        
+        // Check if already downloaded
+        let descriptor = FetchDescriptor<WorkoutTemplate>(
+            predicate: #Predicate<WorkoutTemplate> { $0.sourceRecordName == recordName }
+        )
+        if let existing = try? modelContext.fetch(descriptor).first {
+            importAlertMessage = "You've already downloaded \"\(existing.name)\"."
+            pendingPayload = nil
+            pendingRecordName = nil
+            showingImportAlert = true
+            pendingImportRecordName = nil
+            return
+        }
+        
+        do {
+            let (payload, _) = try await service.fetchRoutine(recordName: recordName)
+            pendingPayload = payload
+            pendingRecordName = recordName
+            importAlertMessage = "Download \"\(payload.name)\" by \(payload.creatorName)?"
+            showingImportAlert = true
+        } catch {
+            importAlertMessage = error.localizedDescription
+            pendingPayload = nil
+            pendingRecordName = nil
+            showingImportAlert = true
+        }
+        
+        pendingImportRecordName = nil
+    }
+    
+    private func performImport(payload: SharedRoutinePayload, recordName: String) {
+        // Count all templates to determine next sort order
+        let allDescriptor = FetchDescriptor<WorkoutTemplate>()
+        let count = (try? modelContext.fetchCount(allDescriptor)) ?? 0
+        
+        let template = RoutineSerializer.deserialize(
+            payload: payload,
+            sourceRecordName: recordName,
+            nextSortOrder: count
+        )
+        modelContext.insert(template)
+        try? modelContext.save()
+        
+        // Switch to Downloaded tab
+        selectedTab = 1
+        clearImportState()
+    }
+    
+    private func clearImportState() {
+        pendingPayload = nil
+        pendingRecordName = nil
+        pendingImportRecordName = nil
+    }
+}
+
+// MARK: - My Routines Tab
+
+struct MyRoutinesView: View {
+    @Environment(\.modelContext) private var modelContext
+    @Query(filter: #Predicate<WorkoutTemplate> { $0.isDownloaded != true },
+           sort: \WorkoutTemplate.sortOrder)
     private var templates: [WorkoutTemplate]
     
     @State private var selectedTemplate: WorkoutTemplate?
@@ -63,7 +174,6 @@ struct ContentView: View {
                 }
             }
             .onMove { source, destination in
-                // Build a mutable sorted list, move, then reassign sortOrder
                 var ordered = templates.sorted { $0.sortOrder < $1.sortOrder }
                 ordered.move(fromOffsets: source, toOffset: destination)
                 for (index, t) in ordered.enumerated() {
@@ -71,7 +181,7 @@ struct ContentView: View {
                 }
             }
         }
-        .navigationTitle("Routines")
+        .navigationTitle("My Routines")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button(action: { showingAddTemplate = true }) {
@@ -108,10 +218,11 @@ struct ContentView: View {
             Text("Are you sure you want to delete this routine? This cannot be undone.")
         }
         .onAppear {
-            if templates.isEmpty {
+            let hasSeeded = UserDefaults.standard.bool(forKey: "hasSeededSampleData")
+            if !hasSeeded && templates.isEmpty {
                 seedSampleData()
-            } else {
-                // Assign sort orders to existing templates that don't have them
+                UserDefaults.standard.set(true, forKey: "hasSeededSampleData")
+            } else if !templates.isEmpty {
                 let allZero = templates.allSatisfy { $0.sortOrder == 0 } && templates.count > 1
                 if allZero {
                     for (index, t) in templates.enumerated() {
@@ -260,7 +371,104 @@ struct ContentView: View {
     }
 }
 
+// MARK: - Downloaded Routines Tab
+
+struct DownloadedRoutinesView: View {
+    @Environment(\.modelContext) private var modelContext
+    @Query(filter: #Predicate<WorkoutTemplate> { $0.isDownloaded == true },
+           sort: \WorkoutTemplate.sortOrder)
+    private var templates: [WorkoutTemplate]
+    
+    @State private var selectedTemplate: WorkoutTemplate?
+    @State private var templateToDelete: WorkoutTemplate?
+    @State private var showingDeleteConfirmation = false
+    @State private var hasCheckedForUpdates = false
+    
+    var body: some View {
+        NavigationSplitView {
+            downloadedList
+        } detail: {
+            if let template = selectedTemplate {
+                TemplateEditorView(template: template)
+            } else {
+                Text("Select a routine")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+    
+    private var downloadedList: some View {
+        Group {
+            if templates.isEmpty {
+                ContentUnavailableView(
+                    "No Downloaded Routines",
+                    systemImage: "arrow.down.circle",
+                    description: Text("When someone shares a routine link with you, it will appear here.")
+                )
+            } else {
+                List(selection: $selectedTemplate) {
+                    ForEach(templates) { template in
+                        NavigationLink(value: template) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(template.name)
+                                        .font(.headline)
+                                    if let creator = template.creatorName {
+                                        Text("by \(creator)")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                
+                                Spacer()
+                                
+                                if template.hasAvailableUpdate == true {
+                                    Circle()
+                                        .fill(.orange)
+                                        .frame(width: 10, height: 10)
+                                }
+                            }
+                        }
+                    }
+                    .onDelete { indexSet in
+                        if let index = indexSet.first {
+                            templateToDelete = templates[index]
+                            showingDeleteConfirmation = true
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Downloaded")
+        .alert(
+            "Delete Routine",
+            isPresented: $showingDeleteConfirmation
+        ) {
+            Button("Delete", role: .destructive) {
+                if let template = templateToDelete {
+                    if selectedTemplate?.id == template.id {
+                        selectedTemplate = nil
+                    }
+                    modelContext.delete(template)
+                    templateToDelete = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                templateToDelete = nil
+            }
+        } message: {
+            Text("Are you sure you want to delete this downloaded routine? This cannot be undone.")
+        }
+        .task {
+            if !hasCheckedForUpdates {
+                hasCheckedForUpdates = true
+                await RoutineUpdateChecker.checkAllForUpdates(context: modelContext)
+            }
+        }
+    }
+}
+
 #Preview {
-    ContentView()
+    ContentView(pendingImportRecordName: .constant(nil))
         .modelContainer(for: [WorkoutTemplate.self, IntervalBlock.self, IntervalItem.self])
 }

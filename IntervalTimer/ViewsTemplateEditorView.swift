@@ -165,7 +165,7 @@ struct DecimalTextField: UIViewRepresentable {
 }
 #endif
 
-private let maxNestingDepth = 4
+private let maxNestingDepth = 2
 
 // Depth-based color for visual nesting
 private func depthColor(_ depth: Int) -> Color {
@@ -186,6 +186,9 @@ struct TemplateEditorView: View {
     @State private var showingWorkoutSession = false
     @State private var isEditing = false
     @State private var showingDeleteConfirmation = false
+    @State private var showingShareSheet = false
+    @State private var isAcceptingUpdate = false
+    @State private var showingMakeCopyConfirmation = false
     
     // Child context for transactional editing
     @State private var childContext: ModelContext?
@@ -231,6 +234,51 @@ struct TemplateEditorView: View {
     @ViewBuilder
     private func editorContent(for template: WorkoutTemplate) -> some View {
         List {
+            // Update banner for downloaded routines
+            if template.isDownloaded == true && template.hasAvailableUpdate == true {
+                Section {
+                    VStack(spacing: 12) {
+                        HStack {
+                            Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                                .foregroundStyle(.orange)
+                            Text("An update is available from the creator.")
+                                .font(.subheadline)
+                            Spacer()
+                        }
+                        
+                        HStack(spacing: 12) {
+                            Button {
+                                Task { await acceptUpdate(for: template) }
+                            } label: {
+                                HStack {
+                                    Spacer()
+                                    if isAcceptingUpdate {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                    } else {
+                                        Text("Accept Update")
+                                    }
+                                    Spacer()
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(isAcceptingUpdate)
+                            
+                            Button {
+                                keepCurrentVersion(template)
+                            } label: {
+                                HStack {
+                                    Spacer()
+                                    Text("Keep Current")
+                                    Spacer()
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                }
+            }
+            
             // Template name section
             Section {
                 if isEditing {
@@ -263,8 +311,15 @@ struct TemplateEditorView: View {
                         }
                     }
                 } else {
-                    Text(template.name)
-                        .font(.title2)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(template.name)
+                            .font(.title2)
+                        if template.isDownloaded == true, let creator = template.creatorName {
+                            Text("by \(creator)")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
             }
             
@@ -287,27 +342,35 @@ struct TemplateEditorView: View {
                 }
             }
             
-            // Blocks
-            ForEach(template.sortedBlocks) { block in
-                BlockEditorSection(
-                    block: block,
-                    template: template,
-                    depth: 0,
-                    isEditing: isEditing,
-                    onChanged: markChanged
-                )
-            }
-            .onMove { source, destination in
-                var sortedBlocks = template.blocks.sorted { $0.sortOrder < $1.sortOrder }
-                sortedBlocks.move(fromOffsets: source, toOffset: destination)
-                for (index, block) in sortedBlocks.enumerated() {
-                    block.sortOrder = index
+            // Blocks — all in one section so ForEach.onMove works for reordering
+            Section {
+                ForEach(template.sortedBlocks) { block in
+                    BlockEditorRow(
+                        block: block,
+                        template: template,
+                        depth: 0,
+                        isEditing: isEditing,
+                        onChanged: markChanged
+                    )
                 }
-                markChanged()
+                .onMove { source, destination in
+                    var sortedBlocks = template.blocks.sorted { $0.sortOrder < $1.sortOrder }
+                    // Validate indices — DisclosureGroup child rows can route
+                    // stale move events here with out-of-range indices
+                    guard source.allSatisfy({ $0 >= 0 && $0 < sortedBlocks.count }),
+                          destination >= 0 && destination <= sortedBlocks.count else {
+                        return
+                    }
+                    sortedBlocks.move(fromOffsets: source, toOffset: destination)
+                    for (index, block) in sortedBlocks.enumerated() {
+                        block.sortOrder = index
+                    }
+                    markChanged()
+                }
+                .moveDisabled(!isEditing)
             }
-            .moveDisabled(!isEditing)
             
-            // Add Block button (only in edit mode)
+            // Add Block button (edit mode only)
             if isEditing {
                 Section {
                     Button(action: {
@@ -364,11 +427,30 @@ struct TemplateEditorView: View {
                 }
             } else {
                 // View mode toolbar
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        isEditing = true
-                    } label: {
-                        Label("Edit", systemImage: "pencil")
+                if template.isDownloaded != true {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            isEditing = true
+                        } label: {
+                            Label("Edit", systemImage: "pencil")
+                        }
+                    }
+                    
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            showingShareSheet = true
+                        } label: {
+                            Label("Share", systemImage: "square.and.arrow.up")
+                        }
+                    }
+                } else {
+                    // Downloaded routine: Make a Copy button
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            showingMakeCopyConfirmation = true
+                        } label: {
+                            Label("Make a Copy", systemImage: "doc.on.doc")
+                        }
                     }
                 }
                 
@@ -396,6 +478,20 @@ struct TemplateEditorView: View {
         } message: {
             Text("Are you sure you want to delete this routine? This cannot be undone.")
         }
+        .sheet(isPresented: $showingShareSheet) {
+            ShareRoutineView(template: template)
+        }
+        .alert(
+            "Make a Copy",
+            isPresented: $showingMakeCopyConfirmation
+        ) {
+            Button("Copy") {
+                makeCopy(of: template)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will create an editable copy in your My Routines tab.")
+        }
     }
     
     private func markChanged() {
@@ -414,11 +510,38 @@ struct TemplateEditorView: View {
         try? parentContext.save()
         dismiss()
     }
+    
+    private func makeCopy(of template: WorkoutTemplate) {
+        let newBlocks = template.blocks.map { $0.duplicate() }
+        let copy = WorkoutTemplate(
+            name: "\(template.name) Copy",
+            blocks: newBlocks,
+            originalTemplateID: template.originalTemplateID
+        )
+        parentContext.insert(copy)
+        try? parentContext.save()
+    }
+    
+    private func acceptUpdate(for template: WorkoutTemplate) async {
+        isAcceptingUpdate = true
+        do {
+            try await RoutineUpdateChecker.acceptUpdate(for: template, context: parentContext)
+            setupChildContext()
+        } catch {
+            // Error handling — could show an alert here
+        }
+        isAcceptingUpdate = false
+    }
+    
+    private func keepCurrentVersion(_ template: WorkoutTemplate) {
+        try? RoutineUpdateChecker.unlinkRoutine(template, context: parentContext)
+        dismiss()
+    }
 }
 
-// MARK: - Block Editor Section (recursive)
+// MARK: - Block Editor Row (flat row with expandable content)
 
-struct BlockEditorSection: View {
+struct BlockEditorRow: View {
     @Environment(\.modelContext) private var modelContext
     @Bindable var block: IntervalBlock
     let template: WorkoutTemplate
@@ -434,70 +557,72 @@ struct BlockEditorSection: View {
     }
     
     var body: some View {
-        Section {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            // Block settings row (edit mode only) — pinned, not movable
             if isEditing {
-                // Edit mode: full controls
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        HStack(spacing: 2) {
-                            Text("Repeat:")
-                                .foregroundStyle(.secondary)
-                            
-                            #if os(iOS)
-                            NumericTextField(
-                                value: Binding(
-                                    get: { block.repeatCount },
-                                    set: { block.repeatCount = $0 }
-                                ),
-                                range: 1...99,
-                                onChanged: onChanged
-                            )
-                            .frame(width: 45, height: 34)
-                            #else
-                            TextField("", value: Binding(
+                HStack {
+                    HStack(spacing: 2) {
+                        Text("Repeat:")
+                            .foregroundStyle(.secondary)
+                            .font(.subheadline)
+                        
+                        #if os(iOS)
+                        NumericTextField(
+                            value: Binding(
                                 get: { block.repeatCount },
-                                set: { newVal in
-                                    block.repeatCount = max(1, min(99, newVal))
-                                    onChanged()
-                                }
-                            ), format: .number)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 45)
-                            .multilineTextAlignment(.center)
-                            #endif
-                            
-                            Stepper("", value: Binding(
-                                get: { block.repeatCount },
-                                set: { newVal in
-                                    block.repeatCount = max(1, min(99, newVal))
-                                    onChanged()
-                                }
-                            ), in: 1...99)
-                            .labelsHidden()
-                        }
+                                set: { block.repeatCount = $0 }
+                            ),
+                            range: 1...99,
+                            onChanged: onChanged
+                        )
+                        .frame(width: 45, height: 34)
+                        #else
+                        TextField("", value: Binding(
+                            get: { block.repeatCount },
+                            set: { newVal in
+                                block.repeatCount = max(1, min(99, newVal))
+                                onChanged()
+                            }
+                        ), format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 45)
+                        .multilineTextAlignment(.center)
+                        #endif
                         
-                        Spacer()
-                        
-                        Button(action: duplicateBlock) {
-                            Label("Duplicate Block", systemImage: "doc.on.doc")
-                                .labelStyle(.iconOnly)
-                        }
-                        .buttonStyle(.borderless)
-                        
-                        Button(role: .destructive, action: deleteBlock) {
-                            Label("Delete Block", systemImage: "trash")
-                                .labelStyle(.iconOnly)
-                        }
-                        .buttonStyle(.borderless)
+                        Stepper("", value: Binding(
+                            get: { block.repeatCount },
+                            set: { newVal in
+                                block.repeatCount = max(1, min(99, newVal))
+                                onChanged()
+                            }
+                        ), in: 1...99)
+                        .labelsHidden()
                     }
+                    
+                    Spacer()
+                    
+                    Button(action: duplicateBlock) {
+                        Label("Duplicate", systemImage: "doc.on.doc")
+                            .labelStyle(.iconOnly)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    
+                    Button(role: .destructive, action: deleteBlock) {
+                        Label("Delete", systemImage: "trash")
+                            .labelStyle(.iconOnly)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
                 }
-                .padding(.vertical, 4)
+                .moveDisabled(true)
+                .deleteDisabled(true)
             }
             
-            // Content: intervals and/or child blocks
-            if isExpanded {
-                // Intervals
-                ForEach(block.sortedIntervals) { interval in
+            // Intervals and child blocks intermingled by sortOrder
+            ForEach(block.sortedChildren) { child in
+                switch child {
+                case .interval(let interval):
                     IntervalRowView(
                         interval: interval,
                         block: block,
@@ -506,15 +631,8 @@ struct BlockEditorSection: View {
                         isEditing: isEditing,
                         onChanged: onChanged
                     )
-                }
-                .onMove { source, destination in
-                    moveIntervals(from: source, to: destination)
-                }
-                .moveDisabled(!isEditing)
-                
-                // Child blocks
-                ForEach(block.sortedChildBlocks) { childBlock in
-                    BlockEditorSection(
+                case .childBlock(let childBlock):
+                    BlockEditorRow(
                         block: childBlock,
                         template: template,
                         depth: depth + 1,
@@ -522,28 +640,65 @@ struct BlockEditorSection: View {
                         onChanged: onChanged
                     )
                 }
-                .onMove { source, destination in
-                    moveChildBlocks(from: source, to: destination)
+            }
+            .onMove { source, destination in
+                var children = block.sortedChildren
+                guard source.allSatisfy({ $0 >= 0 && $0 < children.count }),
+                      destination >= 0 && destination <= children.count else {
+                    return
                 }
-                .moveDisabled(!isEditing)
-                
-                // Add buttons (edit mode only)
-                if isEditing {
-                    HStack {
-                        Button(action: addInterval) {
-                            Label("Add Interval", systemImage: "plus.circle")
-                        }
-                        
-                        if depth < maxNestingDepth {
-                            Button(action: addChildBlock) {
-                                Label("Add Sub-Block", systemImage: "folder.badge.plus")
-                            }
-                        }
+                children.move(fromOffsets: source, toOffset: destination)
+                for (index, child) in children.enumerated() {
+                    switch child {
+                    case .interval(let interval):
+                        interval.sortOrder = index
+                    case .childBlock(let childBlock):
+                        childBlock.sortOrder = index
                     }
                 }
+                onChanged()
             }
-        } header: {
-            HStack {
+            .moveDisabled(!isEditing)
+            
+            // Add buttons (edit mode only) — pinned, not movable
+            if isEditing {
+                Button(action: addInterval) {
+                    HStack(spacing: 6) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(blockColor)
+                            .frame(width: 4, height: 16)
+                        Label("Add Interval", systemImage: "plus.circle")
+                            .font(.subheadline)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .moveDisabled(true)
+                .deleteDisabled(true)
+                
+                if depth < maxNestingDepth {
+                    Button(action: addChildBlock) {
+                        HStack(spacing: 6) {
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(blockColor)
+                                .frame(width: 4, height: 16)
+                            Label("Add Sub-Block", systemImage: "folder.badge.plus")
+                                .font(.subheadline)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .moveDisabled(true)
+                    .deleteDisabled(true)
+                }
+            }
+        } label: {
+            // Block title — this is what the drag handle aligns with
+            HStack(spacing: 6) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(blockColor)
+                    .frame(width: 4, height: 20)
+                
                 if editingBlockName && isEditing {
                     TextField("Block Name", text: Binding(
                         get: { block.name ?? "" },
@@ -557,29 +712,23 @@ struct BlockEditorSection: View {
                         onChanged()
                     }
                 } else {
-                    Button(action: { isExpanded.toggle() }) {
-                        HStack {
-                            Text(block.name ?? "Unnamed Block")
-                                .font(.headline)
-                                .fontWeight(.bold)
-                            if block.repeatCount > 1 {
-                                Text("×\(block.repeatCount)")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                            }
-                            if block.isGroup {
-                                Image(systemName: "arrow.triangle.2.circlepath")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        }
+                    Text(block.name ?? "Unnamed Block")
+                        .font(.headline)
+                        .fontWeight(.bold)
+                    if block.repeatCount > 1 {
+                        Text("×\(block.repeatCount)")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
                     }
-                    .buttonStyle(.plain)
+                    if block.isGroup {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 
                 if isEditing {
+                    Spacer()
                     Button {
                         editingBlockName.toggle()
                     } label: {
@@ -590,19 +739,7 @@ struct BlockEditorSection: View {
                 }
             }
         }
-        // Visual distinction for sub-blocks: indentation + colored left border
-        .padding(.leading, CGFloat(depth) * 16)
-        .listRowBackground(
-            depth > 0
-            ? AnyView(
-                HStack(spacing: 0) {
-                    Spacer().frame(width: CGFloat(depth) * 16 - 4)
-                    blockColor.frame(width: 4)
-                    Color.clear
-                }
-            )
-            : AnyView(Color.clear)
-        )
+        .padding(.leading, CGFloat(depth) * 4)
     }
     
     // MARK: - Actions
@@ -611,7 +748,7 @@ struct BlockEditorSection: View {
         let newInterval = IntervalItem(
             name: "Interval \(block.intervals.count + 1)",
             duration: 60,
-            sortOrder: block.intervals.count
+            sortOrder: block.nextChildSortOrder
         )
         block.intervals.append(newInterval)
         onChanged()
@@ -621,29 +758,11 @@ struct BlockEditorSection: View {
         let newBlock = IntervalBlock(
             name: "Sub-Block \(block.childBlocks.count + 1)",
             repeatCount: 1,
-            sortOrder: block.childBlocks.count,
+            sortOrder: block.nextChildSortOrder,
             intervals: [],
             parentBlock: block
         )
         block.childBlocks.append(newBlock)
-        onChanged()
-    }
-    
-    private func moveIntervals(from source: IndexSet, to destination: Int) {
-        var sortedIntervals = block.intervals.sorted { $0.sortOrder < $1.sortOrder }
-        sortedIntervals.move(fromOffsets: source, toOffset: destination)
-        for (index, interval) in sortedIntervals.enumerated() {
-            interval.sortOrder = index
-        }
-        onChanged()
-    }
-    
-    private func moveChildBlocks(from source: IndexSet, to destination: Int) {
-        var sorted = block.childBlocks.sorted { $0.sortOrder < $1.sortOrder }
-        sorted.move(fromOffsets: source, toOffset: destination)
-        for (index, child) in sorted.enumerated() {
-            child.sortOrder = index
-        }
         onChanged()
     }
     
@@ -681,6 +800,10 @@ struct BlockEditorSection: View {
 struct DurationPickerView: View {
     @Binding var duration: TimeInterval
     
+    private var isUntimed: Bool {
+        duration <= 0
+    }
+    
     private var minutes: Int {
         Int(duration) / 60
     }
@@ -689,11 +812,27 @@ struct DurationPickerView: View {
     }
     
     var body: some View {
-        #if os(iOS)
-        iOSPicker
-        #else
-        macOSPicker
-        #endif
+        VStack(spacing: 8) {
+            Toggle("No Timer (manual advance)", isOn: Binding(
+                get: { isUntimed },
+                set: { noTimer in
+                    if noTimer {
+                        duration = 0
+                    } else {
+                        duration = 60  // default to 1 minute when re-enabling
+                    }
+                }
+            ))
+            .font(.subheadline)
+            
+            if !isUntimed {
+                #if os(iOS)
+                iOSPicker
+                #else
+                macOSPicker
+                #endif
+            }
+        }
     }
     
     #if os(iOS)
@@ -720,11 +859,10 @@ struct DurationPickerView: View {
             Picker("Seconds", selection: Binding(
                 get: { seconds },
                 set: { newSec in
-                    let total = TimeInterval(minutes * 60 + newSec)
-                    duration = max(5, total)
+                    duration = TimeInterval(minutes * 60 + newSec)
                 }
             )) {
-                ForEach(Array(stride(from: 0, through: 55, by: 5)), id: \.self) { s in
+                ForEach(0...59, id: \.self) { s in
                     Text("\(s)").tag(s)
                 }
             }
@@ -736,7 +874,7 @@ struct DurationPickerView: View {
                 .font(.body)
                 .foregroundStyle(.secondary)
         }
-        .frame(height: 100)
+        .frame(height: 150)
     }
     #endif
     
@@ -900,26 +1038,38 @@ struct IntervalRowView: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.bordered)
+                #if os(iOS)
+                .sheet(isPresented: $showingDurationPicker) {
+                    DurationPickerView(duration: Binding(
+                        get: { interval.duration },
+                        set: { interval.duration = $0; onChanged() }
+                    ))
+                    .padding()
+                    .presentationDetents([.fraction(0.35)])
+                    .presentationDragIndicator(.visible)
+                }
+                #else
                 .popover(isPresented: $showingDurationPicker) {
                     DurationPickerView(duration: Binding(
                         get: { interval.duration },
                         set: { interval.duration = $0; onChanged() }
                     ))
                     .padding()
-                    #if os(macOS)
                     .frame(width: 320, height: 50)
-                    #endif
                 }
+                #endif
                 
                 Button(action: duplicateInterval) {
                     Label("Duplicate", systemImage: "doc.on.doc")
                         .labelStyle(.iconOnly)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
                 
                 Button(role: .destructive, action: deleteInterval) {
                     Label("Delete", systemImage: "trash")
                         .labelStyle(.iconOnly)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
             }
@@ -989,6 +1139,7 @@ struct IntervalRowView: View {
     }
     
     private func formatDuration(_ seconds: TimeInterval) -> String {
+        if seconds <= 0 { return "Manual" }
         let minutes = Int(seconds) / 60
         let secs = Int(seconds) % 60
         if minutes > 0 {

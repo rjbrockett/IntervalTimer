@@ -2,7 +2,18 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>IntervalTimer uses your location to track distance during workouts.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.typewritermunky.intervaltimer</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>intervaltimer</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

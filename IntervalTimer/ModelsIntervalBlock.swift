@@ -1,6 +1,26 @@
 import Foundation
 import SwiftData
 
+/// Represents either an interval or a child block, for unified sorting within a parent block
+enum BlockChild: Identifiable {
+    case interval(IntervalItem)
+    case childBlock(IntervalBlock)
+    
+    var id: UUID {
+        switch self {
+        case .interval(let item): return item.id
+        case .childBlock(let block): return block.id
+        }
+    }
+    
+    var sortOrder: Int {
+        switch self {
+        case .interval(let item): return item.sortOrder
+        case .childBlock(let block): return block.sortOrder
+        }
+    }
+}
+
 @Model
 final class IntervalBlock {
     var id: UUID
@@ -29,6 +49,20 @@ final class IntervalBlock {
     /// Sorted intervals by sortOrder
     var sortedIntervals: [IntervalItem] {
         intervals.sorted { $0.sortOrder < $1.sortOrder }
+    }
+    
+    /// All children (intervals + child blocks) sorted together by sortOrder
+    var sortedChildren: [BlockChild] {
+        let intervalItems: [BlockChild] = intervals.map { .interval($0) }
+        let blockItems: [BlockChild] = childBlocks.map { .childBlock($0) }
+        return (intervalItems + blockItems).sorted { $0.sortOrder < $1.sortOrder }
+    }
+    
+    /// Next available sortOrder across both intervals and child blocks
+    var nextChildSortOrder: Int {
+        let maxInterval = intervals.map(\.sortOrder).max() ?? -1
+        let maxBlock = childBlocks.map(\.sortOrder).max() ?? -1
+        return max(maxInterval, maxBlock) + 1
     }
     
     init(id: UUID = UUID(), 
