@@ -112,7 +112,7 @@ Adding new fields to models requires updating BOTH iOS and watch copies.
 ### View/Edit Mode (ViewsTemplateEditorView)
 - `@State private var isEditing` toggles between read-only view and full editor
 - Edit mode: pencil toolbar button enters, Done saves + exits, Cancel reverts via child ModelContext
-- `.environment(\.editMode, .constant(.active))` enables drag handles in edit mode
+- `@State private var editMode` synced with `isEditing` via `.onChange`, passed as `.environment(\.editMode, $editMode)` to enable drag handles
 - `.navigationBarBackButtonHidden(isEditing)` prevents accidental navigation
 
 ### Transactional Editing
@@ -171,3 +171,12 @@ Adding new fields to models requires updating BOTH iOS and watch copies.
 ## Naming
 - User-facing: "Routines" (not "Templates" or "Workouts")
 - Internal code still uses `template`/`WorkoutTemplate` variable names
+
+## Rules
+
+### Design Decisions
+- **NEVER** make design decisions without explicitly checking with the user first. Always ask before removing features, changing approaches, or abandoning a requested feature. This is non-negotiable.
+
+### Git
+- **NEVER** commit, push, or pull without the user explicitly asking for it.
+- **Do not** add `Co-Authored-By: Claude` or cite Claude as an author on commits. Use only the user's identity.
