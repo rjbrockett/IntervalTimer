@@ -177,6 +177,10 @@ Adding new fields to models requires updating BOTH iOS and watch copies.
 ### Design Decisions
 - **NEVER** make design decisions without explicitly checking with the user first. Always ask before removing features, changing approaches, or abandoning a requested feature. This is non-negotiable.
 
+### Communication
+- Be concise in responses. Don't over-explain or narrate your thought process at length.
+- Don't flip-flop between approaches. Pick a direction, commit to it, and only change course if the user says it's wrong.
+
 ### Git
 - **NEVER** commit, push, or pull without the user explicitly asking for it.
 - **Do not** add `Co-Authored-By: Claude` or cite Claude as an author on commits. Use only the user's identity.

@@ -11,14 +11,25 @@ struct IntervalTimer_Watch_App: App {
             IntervalBlock.self,
             IntervalItem.self
         ])
-        let configuration = ModelConfiguration(
+        
+        #if targetEnvironment(simulator)
+        // Simulator: local-only store (CloudKit entitlements unavailable)
+        let config = ModelConfiguration(
+            schema: schema,
+            cloudKitDatabase: .none
+        )
+        #else
+        // Device: CloudKit-backed store for cross-device sync
+        let config = ModelConfiguration(
             schema: schema,
             cloudKitDatabase: .automatic
         )
+        #endif
+        
         do {
             modelContainer = try ModelContainer(
                 for: schema,
-                configurations: [configuration]
+                configurations: [config]
             )
         } catch {
             fatalError("Failed to create ModelContainer: \(error)")

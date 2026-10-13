@@ -832,6 +832,7 @@ struct BlockEditorRow: View {
                         isEditing: isEditing,
                         onChanged: onChanged
                     )
+                    
                 case .childBlock(let childBlock):
                     BlockEditorRow(
                         block: childBlock,
@@ -963,12 +964,12 @@ struct BlockEditorRow: View {
             } action: { minY in
                 onHeaderPosition(block.id, minY)
             }
+            .onDrag {
+                onDragStarted(block.id, depth)
+                return NSItemProvider(object: block.id.uuidString as NSString)
+            }
         }
         .padding(.leading, CGFloat(depth) * 4)
-        .onDrag {
-            onDragStarted(block.id, depth)
-            return NSItemProvider(object: block.id.uuidString as NSString)
-        }
         .onChange(of: allCollapsed) { _, collapsed in
             isExpanded = !collapsed
         }
