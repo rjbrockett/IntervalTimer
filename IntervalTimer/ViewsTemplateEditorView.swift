@@ -7,10 +7,19 @@ private struct AllCollapsedKey: EnvironmentKey {
     static let defaultValue = false
 }
 
+private struct DraggingBlockIDKey: EnvironmentKey {
+    static let defaultValue: UUID? = nil
+}
+
 extension EnvironmentValues {
     var allBlocksCollapsed: Bool {
         get { self[AllCollapsedKey.self] }
         set { self[AllCollapsedKey.self] = newValue }
+    }
+    
+    var draggingBlockID: UUID? {
+        get { self[DraggingBlockIDKey.self] }
+        set { self[DraggingBlockIDKey.self] = newValue }
     }
 }
 
@@ -215,6 +224,8 @@ struct TemplateEditorView: View {
     @State private var isAcceptingUpdate = false
     @State private var showingMakeCopyConfirmation = false
     @State private var allCollapsed = false
+    @State private var draggingBlockID: UUID? = nil
+    @State private var editMode: EditMode = .inactive
     @State private var headerPositions: [UUID: CGFloat] = [:]  // block id -> header minY
     @State private var contentBottoms: [UUID: CGFloat] = [:]
     @State private var listTopEdge: CGFloat = 0
@@ -238,6 +249,9 @@ struct TemplateEditorView: View {
         }
         .onChange(of: template.id) {
             setupChildContext()
+        }
+        .onChange(of: isEditing) { _, editing in
+            editMode = editing ? .active : .inactive
         }
     }
     
@@ -391,6 +405,12 @@ struct TemplateEditorView: View {
                             },
                             onContentBottom: { id, maxY in
                                 contentBottoms[id] = maxY
+                            },
+                            onDragStarted: { id in
+                                draggingBlockID = id
+                            },
+                            onDragEnded: {
+                                draggingBlockID = nil
                             }
                         )
                     }
@@ -405,6 +425,7 @@ struct TemplateEditorView: View {
                             block.sortOrder = index
                         }
                         markChanged()
+                        draggingBlockID = nil
                     }
                     .moveDisabled(!isEditing)
                 }
@@ -447,8 +468,9 @@ struct TemplateEditorView: View {
         }
         .navigationTitle(isEditing ? "Edit Routine" : template.name)
         .navigationBarBackButtonHidden(isEditing)
-        .environment(\.editMode, isEditing ? .constant(.active) : .constant(.inactive))
+        .environment(\.editMode, $editMode)
         .environment(\.allBlocksCollapsed, allCollapsed)
+        .environment(\.draggingBlockID, draggingBlockID)
         .scrollDismissesKeyboard(.immediately)
         #if os(iOS)
         .toolbar(.hidden, for: .tabBar)
@@ -691,6 +713,7 @@ struct TemplateEditorView: View {
 struct BlockEditorRow: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.allBlocksCollapsed) private var allCollapsed
+    @Environment(\.draggingBlockID) private var draggingBlockID
     @Bindable var block: IntervalBlock
     let template: WorkoutTemplate
     let depth: Int
@@ -698,8 +721,11 @@ struct BlockEditorRow: View {
     var onChanged: () -> Void
     var onHeaderPosition: (UUID, CGFloat) -> Void = { _, _ in }
     var onContentBottom: (UUID, CGFloat) -> Void = { _, _ in }
+    var onDragStarted: (UUID) -> Void = { _ in }
+    var onDragEnded: () -> Void = {}
     @State private var isExpanded = true
     @State private var editingBlockName = false
+    @State private var wasExpandedBeforeDrag = true
     
     private var blockColor: Color {
         depthColor(depth)
@@ -788,7 +814,9 @@ struct BlockEditorRow: View {
                         isEditing: isEditing,
                         onChanged: onChanged,
                         onHeaderPosition: onHeaderPosition,
-                        onContentBottom: onContentBottom
+                        onContentBottom: onContentBottom,
+                        onDragStarted: onDragStarted,
+                        onDragEnded: onDragEnded
                     )
                 }
             }
@@ -808,6 +836,7 @@ struct BlockEditorRow: View {
                     }
                 }
                 onChanged()
+                onDragEnded()
             }
             .moveDisabled(!isEditing)
             
@@ -908,10 +937,28 @@ struct BlockEditorRow: View {
             } action: { minY in
                 onHeaderPosition(block.id, minY)
             }
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: 0.5)
+                    .onEnded { _ in
+                        if isEditing {
+                            onDragStarted(block.id)
+                        }
+                    }
+            )
         }
         .padding(.leading, CGFloat(depth) * 4)
         .onChange(of: allCollapsed) { _, collapsed in
             isExpanded = !collapsed
+        }
+        .onChange(of: draggingBlockID) { oldValue, newValue in
+            if newValue == block.id {
+                // This block is being dragged — save state and collapse
+                wasExpandedBeforeDrag = isExpanded
+                isExpanded = false
+            } else if oldValue == block.id && newValue == nil {
+                // This block was dropped — restore previous state
+                isExpanded = wasExpandedBeforeDrag
+            }
         }
     }
     
