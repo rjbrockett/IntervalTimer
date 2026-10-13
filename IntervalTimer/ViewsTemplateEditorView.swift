@@ -7,28 +7,10 @@ private struct AllCollapsedKey: EnvironmentKey {
     static let defaultValue = false
 }
 
-private struct DraggingBlockIDKey: EnvironmentKey {
-    static let defaultValue: UUID? = nil
-}
-
-private struct DraggingDepthKey: EnvironmentKey {
-    static let defaultValue: Int? = nil
-}
-
 extension EnvironmentValues {
     var allBlocksCollapsed: Bool {
         get { self[AllCollapsedKey.self] }
         set { self[AllCollapsedKey.self] = newValue }
-    }
-    
-    var draggingBlockID: UUID? {
-        get { self[DraggingBlockIDKey.self] }
-        set { self[DraggingBlockIDKey.self] = newValue }
-    }
-    
-    var draggingDepth: Int? {
-        get { self[DraggingDepthKey.self] }
-        set { self[DraggingDepthKey.self] = newValue }
     }
 }
 
@@ -210,6 +192,31 @@ struct DecimalTextField: UIViewRepresentable {
 
 private let maxNestingDepth = 2
 
+/// Modifier that replaces row content with a zero-height clear view.
+/// Requires `.environment(\.defaultMinListRowHeight, 0)` on the parent List.
+private struct HiddenRowModifier: ViewModifier {
+    let isHidden: Bool
+    
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isHidden {
+            Color.clear
+                .frame(height: 0)
+                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+        } else {
+            content
+        }
+    }
+}
+
+extension View {
+    func hiddenRow(_ isHidden: Bool) -> some View {
+        modifier(HiddenRowModifier(isHidden: isHidden))
+    }
+}
+
 // Depth-based color for visual nesting
 private func depthColor(_ depth: Int) -> Color {
     let colors: [Color] = [.blue, .purple, .orange, .green, .pink]
@@ -233,8 +240,8 @@ struct TemplateEditorView: View {
     @State private var isAcceptingUpdate = false
     @State private var showingMakeCopyConfirmation = false
     @State private var allCollapsed = false
-    @State private var draggingBlockID: UUID? = nil
-    @State private var draggingDepth: Int? = nil
+    /// Block IDs whose content is visually hidden during drag (rows still exist).
+    @State private var hiddenBlockIDs: Set<UUID> = []
     #if os(iOS)
     @State private var editMode: EditMode = .inactive
     #endif
@@ -266,6 +273,9 @@ struct TemplateEditorView: View {
             #if os(iOS)
             editMode = editing ? .active : .inactive
             #endif
+            if !editing {
+                hiddenBlockIDs.removeAll()
+            }
         }
     }
     
@@ -420,14 +430,7 @@ struct TemplateEditorView: View {
                             onContentBottom: { id, maxY in
                                 contentBottoms[id] = maxY
                             },
-                            onDragStarted: { id, dragDepth in
-                                draggingBlockID = id
-                                draggingDepth = dragDepth
-                            },
-                            onDragEnded: {
-                                draggingBlockID = nil
-                                draggingDepth = nil
-                            }
+                            hiddenBlockIDs: $hiddenBlockIDs
                         )
                     }
                     .onMove { source, destination in
@@ -441,8 +444,7 @@ struct TemplateEditorView: View {
                             block.sortOrder = index
                         }
                         markChanged()
-                        draggingBlockID = nil
-                        draggingDepth = nil
+                        hiddenBlockIDs.removeAll()
                     }
                     .moveDisabled(!isEditing)
                 }
@@ -478,6 +480,7 @@ struct TemplateEditorView: View {
                     }
                 }
             }
+        .environment(\.defaultMinListRowHeight, 0)
         .onGeometryChange(for: CGFloat.self) { geo in
             geo.safeAreaInsets.top
         } action: { top in
@@ -489,8 +492,6 @@ struct TemplateEditorView: View {
         .environment(\.editMode, $editMode)
         #endif
         .environment(\.allBlocksCollapsed, allCollapsed)
-        .environment(\.draggingBlockID, draggingBlockID)
-        .environment(\.draggingDepth, draggingDepth)
         .scrollDismissesKeyboard(.immediately)
         #if os(iOS)
         .toolbar(.hidden, for: .tabBar)
@@ -739,8 +740,6 @@ struct TemplateEditorView: View {
 struct BlockEditorRow: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.allBlocksCollapsed) private var allCollapsed
-    @Environment(\.draggingBlockID) private var draggingBlockID
-    @Environment(\.draggingDepth) private var draggingDepth
     @Bindable var block: IntervalBlock
     let template: WorkoutTemplate
     let depth: Int
@@ -748,10 +747,13 @@ struct BlockEditorRow: View {
     var onChanged: () -> Void
     var onHeaderPosition: (UUID, CGFloat) -> Void = { _, _ in }
     var onContentBottom: (UUID, CGFloat) -> Void = { _, _ in }
-    var onDragStarted: (UUID, Int) -> Void = { _, _ in }
-    var onDragEnded: () -> Void = {}
+    @Binding var hiddenBlockIDs: Set<UUID>
     @State private var isExpanded = true
     @State private var editingBlockName = false
+    
+    private var isContentHidden: Bool {
+        hiddenBlockIDs.contains(block.id)
+    }
     
     private var blockColor: Color {
         depthColor(depth)
@@ -816,6 +818,7 @@ struct BlockEditorRow: View {
                     }
                     .buttonStyle(.borderless)
                 }
+                .hiddenRow(isContentHidden)
                 .moveDisabled(true)
                 .deleteDisabled(true)
             }
@@ -832,6 +835,7 @@ struct BlockEditorRow: View {
                         isEditing: isEditing,
                         onChanged: onChanged
                     )
+                    .hiddenRow(isContentHidden)
                     
                 case .childBlock(let childBlock):
                     BlockEditorRow(
@@ -842,9 +846,9 @@ struct BlockEditorRow: View {
                         onChanged: onChanged,
                         onHeaderPosition: onHeaderPosition,
                         onContentBottom: onContentBottom,
-                        onDragStarted: onDragStarted,
-                        onDragEnded: onDragEnded
+                        hiddenBlockIDs: $hiddenBlockIDs
                     )
+                    .hiddenRow(isContentHidden)
                 }
             }
             .onMove { source, destination in
@@ -863,7 +867,7 @@ struct BlockEditorRow: View {
                     }
                 }
                 onChanged()
-                onDragEnded()
+                hiddenBlockIDs.removeAll()
             }
             .moveDisabled(!isEditing)
             
@@ -880,6 +884,7 @@ struct BlockEditorRow: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
+                .hiddenRow(isContentHidden)
                 .moveDisabled(true)
                 .deleteDisabled(true)
                 
@@ -895,6 +900,7 @@ struct BlockEditorRow: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.borderless)
+                    .hiddenRow(isContentHidden)
                     .moveDisabled(true)
                     .deleteDisabled(true)
                 }
@@ -965,7 +971,18 @@ struct BlockEditorRow: View {
                 onHeaderPosition(block.id, minY)
             }
             .onDrag {
-                onDragStarted(block.id, depth)
+                // Populate hiddenBlockIDs with all sibling IDs (same parent)
+                // so their content is replaced with zero-height placeholders.
+                // This keeps UICollectionView row count stable (no crash).
+                let siblings: [IntervalBlock]
+                if let parent = block.parentBlock {
+                    siblings = parent.childBlocks
+                } else {
+                    siblings = template.blocks
+                }
+                for sibling in siblings {
+                    hiddenBlockIDs.insert(sibling.id)
+                }
                 return NSItemProvider(object: block.id.uuidString as NSString)
             }
         }
@@ -973,11 +990,7 @@ struct BlockEditorRow: View {
         .onChange(of: allCollapsed) { _, collapsed in
             isExpanded = !collapsed
         }
-        .onChange(of: draggingBlockID) { _, newValue in
-            if newValue != nil && draggingDepth == depth {
-                withAnimation { isExpanded = false }
-            }
-        }
+
     }
     
     // MARK: - Actions
