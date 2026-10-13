@@ -7,19 +7,10 @@ private struct AllCollapsedKey: EnvironmentKey {
     static let defaultValue = false
 }
 
-private struct DraggingBlockIDKey: EnvironmentKey {
-    static let defaultValue: UUID? = nil
-}
-
 extension EnvironmentValues {
     var allBlocksCollapsed: Bool {
         get { self[AllCollapsedKey.self] }
         set { self[AllCollapsedKey.self] = newValue }
-    }
-    
-    var draggingBlockID: UUID? {
-        get { self[DraggingBlockIDKey.self] }
-        set { self[DraggingBlockIDKey.self] = newValue }
     }
 }
 
@@ -226,7 +217,6 @@ struct TemplateEditorView: View {
     @State private var allCollapsed = false
     @State private var headerPositions: [UUID: CGFloat] = [:]  // block id -> header minY
     @State private var contentBottoms: [UUID: CGFloat] = [:]
-    @State private var draggingBlockID: UUID? = nil
     @State private var listTopEdge: CGFloat = 0
     @State private var stickyOverlayHeight: CGFloat = 0
     
@@ -401,8 +391,7 @@ struct TemplateEditorView: View {
                             },
                             onContentBottom: { id, maxY in
                                 contentBottoms[id] = maxY
-                            },
-                            onDragEnd: { draggingBlockID = nil }
+                            }
                         )
                     }
                     .onMove { source, destination in
@@ -416,7 +405,6 @@ struct TemplateEditorView: View {
                             block.sortOrder = index
                         }
                         markChanged()
-                        draggingBlockID = nil
                     }
                     .moveDisabled(!isEditing)
                 }
@@ -461,7 +449,6 @@ struct TemplateEditorView: View {
         .navigationBarBackButtonHidden(isEditing)
         .environment(\.editMode, isEditing ? .constant(.active) : .constant(.inactive))
         .environment(\.allBlocksCollapsed, allCollapsed)
-        .environment(\.draggingBlockID, draggingBlockID)
         .scrollDismissesKeyboard(.immediately)
         #if os(iOS)
         .toolbar(.hidden, for: .tabBar)
@@ -704,7 +691,6 @@ struct TemplateEditorView: View {
 struct BlockEditorRow: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.allBlocksCollapsed) private var allCollapsed
-    @Environment(\.draggingBlockID) private var draggingBlockID
     @Bindable var block: IntervalBlock
     let template: WorkoutTemplate
     let depth: Int
@@ -712,11 +698,8 @@ struct BlockEditorRow: View {
     var onChanged: () -> Void
     var onHeaderPosition: (UUID, CGFloat) -> Void = { _, _ in }
     var onContentBottom: (UUID, CGFloat) -> Void = { _, _ in }
-    var onDragEnd: () -> Void = {}
-    
     @State private var isExpanded = true
     @State private var editingBlockName = false
-    @State private var wasExpandedBeforeDrag = true
     
     private var blockColor: Color {
         depthColor(depth)
@@ -805,8 +788,7 @@ struct BlockEditorRow: View {
                         isEditing: isEditing,
                         onChanged: onChanged,
                         onHeaderPosition: onHeaderPosition,
-                        onContentBottom: onContentBottom,
-                        onDragEnd: onDragEnd
+                        onContentBottom: onContentBottom
                     )
                 }
             }
@@ -826,7 +808,6 @@ struct BlockEditorRow: View {
                     }
                 }
                 onChanged()
-                onDragEnd()
             }
             .moveDisabled(!isEditing)
             
@@ -931,16 +912,6 @@ struct BlockEditorRow: View {
         .padding(.leading, CGFloat(depth) * 4)
         .onChange(of: allCollapsed) { _, collapsed in
             isExpanded = !collapsed
-        }
-        .onChange(of: draggingBlockID) { oldValue, newValue in
-            if newValue == block.id && oldValue != block.id {
-                // Drag started for this block — save state and collapse
-                wasExpandedBeforeDrag = isExpanded
-                isExpanded = false
-            } else if oldValue == block.id && newValue == nil {
-                // Drag ended for this block — restore previous expansion state
-                isExpanded = wasExpandedBeforeDrag
-            }
         }
     }
     
