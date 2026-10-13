@@ -235,7 +235,9 @@ struct TemplateEditorView: View {
     @State private var allCollapsed = false
     @State private var draggingBlockID: UUID? = nil
     @State private var draggingDepth: Int? = nil
+    #if os(iOS)
     @State private var editMode: EditMode = .inactive
+    #endif
     @State private var headerPositions: [UUID: CGFloat] = [:]  // block id -> header minY
     @State private var contentBottoms: [UUID: CGFloat] = [:]
     @State private var listTopEdge: CGFloat = 0
@@ -261,7 +263,9 @@ struct TemplateEditorView: View {
             setupChildContext()
         }
         .onChange(of: isEditing) { _, editing in
+            #if os(iOS)
             editMode = editing ? .active : .inactive
+            #endif
         }
     }
     
@@ -481,7 +485,9 @@ struct TemplateEditorView: View {
         }
         .navigationTitle(isEditing ? "Edit Routine" : template.name)
         .navigationBarBackButtonHidden(isEditing)
+        #if os(iOS)
         .environment(\.editMode, $editMode)
+        #endif
         .environment(\.allBlocksCollapsed, allCollapsed)
         .environment(\.draggingBlockID, draggingBlockID)
         .environment(\.draggingDepth, draggingDepth)
@@ -560,9 +566,15 @@ struct TemplateEditorView: View {
                 }
             }
         }
+        #if os(iOS)
         .fullScreenCover(isPresented: $showingWorkoutSession) {
             WorkoutSessionView(template: template)
         }
+        #else
+        .sheet(isPresented: $showingWorkoutSession) {
+            WorkoutSessionView(template: template)
+        }
+        #endif
         .alert(
             "Delete Routine",
             isPresented: $showingDeleteConfirmation

@@ -59,7 +59,11 @@ struct WorkoutSessionView: View {
             }
             .padding()
         }
+        #if os(iOS)
         .background(Color(.systemBackground))
+        #else
+        .background(Color(nsColor: .windowBackgroundColor))
+        #endif
         .onAppear {
             if anyIntervalTracksDistance {
                 locationManager.startTracking()
@@ -245,7 +249,11 @@ struct WorkoutSessionView: View {
                 ZStack(alignment: .leading) {
                     // Background
                     RoundedRectangle(cornerRadius: 4)
+                        #if os(iOS)
                         .fill(Color(.systemGray5))
+                        #else
+                        .fill(Color(nsColor: .separatorColor))
+                        #endif
                     
                     // Current step progress
                     if let step = player.currentStep, step.duration > 0 {
