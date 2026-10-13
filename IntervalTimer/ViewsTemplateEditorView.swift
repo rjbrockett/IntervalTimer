@@ -1,6 +1,40 @@
 import SwiftUI
 import SwiftData
 
+// MARK: - Environment Keys
+
+private struct AllCollapsedKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+private struct DraggingBlockIDKey: EnvironmentKey {
+    static let defaultValue: UUID? = nil
+}
+
+extension EnvironmentValues {
+    var allBlocksCollapsed: Bool {
+        get { self[AllCollapsedKey.self] }
+        set { self[AllCollapsedKey.self] = newValue }
+    }
+    
+    var draggingBlockID: UUID? {
+        get { self[DraggingBlockIDKey.self] }
+        set { self[DraggingBlockIDKey.self] = newValue }
+    }
+}
+
+// MARK: - Sticky Header Support
+
+/// Data representing a block header for sticky display
+private struct BlockHeaderInfo: Equatable {
+    let id: UUID
+    let name: String
+    let depth: Int
+    let color: Color
+    let repeatCount: Int
+}
+
+
 // MARK: - Numeric TextField with Done Button
 
 #if os(iOS)
@@ -189,6 +223,12 @@ struct TemplateEditorView: View {
     @State private var showingShareSheet = false
     @State private var isAcceptingUpdate = false
     @State private var showingMakeCopyConfirmation = false
+    @State private var allCollapsed = false
+    @State private var headerPositions: [UUID: CGFloat] = [:]  // block id -> header minY
+    @State private var contentBottoms: [UUID: CGFloat] = [:]
+    @State private var draggingBlockID: UUID? = nil
+    @State private var listTopEdge: CGFloat = 0
+    @State private var stickyOverlayHeight: CGFloat = 0
     
     // Child context for transactional editing
     @State private var childContext: ModelContext?
@@ -232,179 +272,200 @@ struct TemplateEditorView: View {
     }
     
     @ViewBuilder
-    private func editorContent(for template: WorkoutTemplate) -> some View {
-        List {
-            // Update banner for downloaded routines
-            if template.isDownloaded == true && template.hasAvailableUpdate == true {
-                Section {
-                    VStack(spacing: 12) {
-                        HStack {
-                            Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
-                                .foregroundStyle(.orange)
-                            Text("An update is available from the creator.")
-                                .font(.subheadline)
-                            Spacer()
+    private func updateBannerSection(for template: WorkoutTemplate) -> some View {
+        if template.isDownloaded == true && template.hasAvailableUpdate == true {
+            Section {
+                VStack(spacing: 12) {
+                    HStack {
+                        Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                            .foregroundStyle(.orange)
+                        Text("An update is available from the creator.")
+                            .font(.subheadline)
+                        Spacer()
+                    }
+                    
+                    HStack(spacing: 12) {
+                        Button {
+                            Task { await acceptUpdate(for: template) }
+                        } label: {
+                            HStack {
+                                Spacer()
+                                if isAcceptingUpdate {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                } else {
+                                    Text("Accept Update")
+                                }
+                                Spacer()
+                            }
                         }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(isAcceptingUpdate)
                         
-                        HStack(spacing: 12) {
-                            Button {
-                                Task { await acceptUpdate(for: template) }
-                            } label: {
-                                HStack {
-                                    Spacer()
-                                    if isAcceptingUpdate {
-                                        ProgressView()
-                                            .controlSize(.small)
-                                    } else {
-                                        Text("Accept Update")
-                                    }
-                                    Spacer()
-                                }
+                        Button {
+                            keepCurrentVersion(template)
+                        } label: {
+                            HStack {
+                                Spacer()
+                                Text("Keep Current")
+                                Spacer()
                             }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(isAcceptingUpdate)
-                            
-                            Button {
-                                keepCurrentVersion(template)
-                            } label: {
-                                HStack {
-                                    Spacer()
-                                    Text("Keep Current")
-                                    Spacer()
-                                }
-                            }
-                            .buttonStyle(.bordered)
                         }
+                        .buttonStyle(.bordered)
                     }
                 }
             }
-            
-            // Template name section
-            Section {
-                if isEditing {
-                    HStack {
-                        if editingTemplateName {
-                            TextField("Routine Name", text: Binding(
-                                get: { template.name },
-                                set: { template.name = $0; markChanged() }
-                            ))
-                            .textFieldStyle(.roundedBorder)
-                            .onSubmit {
-                                editingTemplateName = false
+        }
+    }
+    
+    @ViewBuilder
+    private func editorContent(for template: WorkoutTemplate) -> some View {
+        List {
+                // Update banner for downloaded routines
+                updateBannerSection(for: template)
+                
+                // Template name section
+                Section {
+                    if isEditing {
+                        HStack {
+                            if editingTemplateName {
+                                TextField("Routine Name", text: Binding(
+                                    get: { template.name },
+                                    set: { template.name = $0; markChanged() }
+                                ))
+                                .textFieldStyle(.roundedBorder)
+                                .onSubmit {
+                                    editingTemplateName = false
+                                }
+                            } else {
+                                Text(template.name)
+                                    .font(.title2)
+                                    .onTapGesture {
+                                        editingTemplateName = true
+                                    }
                             }
-                        } else {
+                            Spacer()
+                            if !editingTemplateName {
+                                Button {
+                                    editingTemplateName = true
+                                } label: {
+                                    Label("Edit", systemImage: "pencil")
+                                        .labelStyle(.iconOnly)
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                        }
+                    } else {
+                        VStack(alignment: .leading, spacing: 4) {
                             Text(template.name)
                                 .font(.title2)
-                                .onTapGesture {
-                                    editingTemplateName = true
-                                }
-                        }
-                        Spacer()
-                        if !editingTemplateName {
-                            Button {
-                                editingTemplateName = true
-                            } label: {
-                                Label("Edit", systemImage: "pencil")
-                                    .labelStyle(.iconOnly)
+                            if template.isDownloaded == true, let creator = template.creatorName {
+                                Text("by \(creator)")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
                             }
-                            .buttonStyle(.borderless)
                         }
                     }
-                } else {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(template.name)
-                            .font(.title2)
-                        if template.isDownloaded == true, let creator = template.creatorName {
-                            Text("by \(creator)")
+                }
+                
+                // Heart Rate Zones toggle
+                Section {
+                    if isEditing {
+                        Toggle("Show Heart Rate Zones", isOn: Binding(
+                            get: { template.showHeartRateZones },
+                            set: { template.showHeartRateZones = $0; markChanged() }
+                        ))
+                        .font(.subheadline)
+                    } else if template.showHeartRateZones {
+                        HStack {
+                            Image(systemName: "heart.fill")
+                                .foregroundStyle(.red)
+                            Text("Heart Rate Zones Enabled")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
                     }
                 }
-            }
-            
-            // Heart Rate Zones toggle
-            Section {
-                if isEditing {
-                    Toggle("Show Heart Rate Zones", isOn: Binding(
-                        get: { template.showHeartRateZones },
-                        set: { template.showHeartRateZones = $0; markChanged() }
-                    ))
-                    .font(.subheadline)
-                } else if template.showHeartRateZones {
-                    HStack {
-                        Image(systemName: "heart.fill")
-                            .foregroundStyle(.red)
-                        Text("Heart Rate Zones Enabled")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            
-            // Blocks — all in one section so ForEach.onMove works for reordering
-            Section {
-                ForEach(template.sortedBlocks) { block in
-                    BlockEditorRow(
-                        block: block,
-                        template: template,
-                        depth: 0,
-                        isEditing: isEditing,
-                        onChanged: markChanged
-                    )
-                }
-                .onMove { source, destination in
-                    var sortedBlocks = template.blocks.sorted { $0.sortOrder < $1.sortOrder }
-                    // Validate indices — DisclosureGroup child rows can route
-                    // stale move events here with out-of-range indices
-                    guard source.allSatisfy({ $0 >= 0 && $0 < sortedBlocks.count }),
-                          destination >= 0 && destination <= sortedBlocks.count else {
-                        return
-                    }
-                    sortedBlocks.move(fromOffsets: source, toOffset: destination)
-                    for (index, block) in sortedBlocks.enumerated() {
-                        block.sortOrder = index
-                    }
-                    markChanged()
-                }
-                .moveDisabled(!isEditing)
-            }
-            
-            // Add Block button (edit mode only)
-            if isEditing {
+                
+                // Blocks — all in one section so ForEach.onMove works for reordering
                 Section {
-                    Button(action: {
-                        let newBlock = IntervalBlock(
-                            name: "Block \(template.blocks.count + 1)",
-                            repeatCount: 1,
-                            sortOrder: template.blocks.count,
-                            intervals: []
+                    ForEach(template.sortedBlocks) { block in
+                        BlockEditorRow(
+                            block: block,
+                            template: template,
+                            depth: 0,
+                            isEditing: isEditing,
+                            onChanged: markChanged,
+                            onHeaderPosition: { id, minY in
+                                headerPositions[id] = minY
+                            },
+                            onContentBottom: { id, maxY in
+                                contentBottoms[id] = maxY
+                            },
+                            onDragEnd: { draggingBlockID = nil }
                         )
-                        template.blocks.append(newBlock)
-                        markChanged()
-                    }) {
-                        Label("Add Block", systemImage: "plus.circle.fill")
                     }
+                    .onMove { source, destination in
+                        var sortedBlocks = template.blocks.sorted { $0.sortOrder < $1.sortOrder }
+                        guard source.allSatisfy({ $0 >= 0 && $0 < sortedBlocks.count }),
+                              destination >= 0 && destination <= sortedBlocks.count else {
+                            return
+                        }
+                        sortedBlocks.move(fromOffsets: source, toOffset: destination)
+                        for (index, block) in sortedBlocks.enumerated() {
+                            block.sortOrder = index
+                        }
+                        markChanged()
+                        draggingBlockID = nil
+                    }
+                    .moveDisabled(!isEditing)
                 }
                 
-                // Delete routine button
-                Section {
-                    Button(role: .destructive) {
-                        showingDeleteConfirmation = true
-                    } label: {
-                        HStack {
-                            Spacer()
-                            Text("Delete Routine")
-                            Spacer()
+                // Add Block button (edit mode only)
+                if isEditing {
+                    Section {
+                        Button(action: {
+                            let newBlock = IntervalBlock(
+                                name: "Block \(template.blocks.count + 1)",
+                                repeatCount: 1,
+                                sortOrder: template.blocks.count,
+                                intervals: []
+                            )
+                            template.blocks.append(newBlock)
+                            markChanged()
+                        }) {
+                            Label("Add Block", systemImage: "plus.circle.fill")
+                        }
+                    }
+                    
+                    // Delete routine button
+                    Section {
+                        Button(role: .destructive) {
+                            showingDeleteConfirmation = true
+                        } label: {
+                            HStack {
+                                Spacer()
+                                Text("Delete Routine")
+                                Spacer()
+                            }
                         }
                     }
                 }
             }
+        .onGeometryChange(for: CGFloat.self) { geo in
+            geo.safeAreaInsets.top
+        } action: { top in
+            listTopEdge = top
         }
         .navigationTitle(isEditing ? "Edit Routine" : template.name)
         .navigationBarBackButtonHidden(isEditing)
         .environment(\.editMode, isEditing ? .constant(.active) : .constant(.inactive))
+        .environment(\.allBlocksCollapsed, allCollapsed)
+        .environment(\.draggingBlockID, draggingBlockID)
         .scrollDismissesKeyboard(.immediately)
+        #if os(iOS)
+        .toolbar(.hidden, for: .tabBar)
+        #endif
         .toolbar {
             if isEditing {
                 // Editing toolbar
@@ -415,6 +476,7 @@ struct TemplateEditorView: View {
                         }
                         isEditing = false
                         editingTemplateName = false
+                        allCollapsed = false
                     }
                 }
                 
@@ -423,7 +485,18 @@ struct TemplateEditorView: View {
                         setupChildContext()
                         isEditing = false
                         editingTemplateName = false
+                        allCollapsed = false
                     }
+                }
+                
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        allCollapsed.toggle()
+                    } label: {
+                        Image(systemName: allCollapsed ? "rectangle.expand.vertical" : "rectangle.compress.vertical")
+                    }
+                    .buttonStyle(.bordered)
+                    .clipShape(Capsule())
                 }
             } else {
                 // View mode toolbar
@@ -492,6 +565,93 @@ struct TemplateEditorView: View {
         } message: {
             Text("This will create an editable copy in your My Routines tab.")
         }
+        .overlay(alignment: .top) {
+            VStack(spacing: 0) {
+                stickyHeaderOverlay
+            }
+        }
+    }
+    
+    /// Computes which headers should be pinned based on current scroll positions
+    @ViewBuilder
+    private var stickyHeaderOverlay: some View {
+        let pinned = pinnedHeaders
+        if !pinned.isEmpty {
+            VStack(spacing: 0) {
+                ForEach(pinned, id: \.id) { info in
+                    HStack(spacing: 6) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(info.color)
+                            .frame(width: 4, height: 20)
+                        
+                        Text(info.name)
+                            .font(.headline)
+                            .fontWeight(.bold)
+                        
+                        if info.repeatCount > 1 {
+                            Text("×\(info.repeatCount)")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        
+                        Spacer()
+                    }
+                    .padding(.leading, CGFloat(info.depth) * 4 + 20)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.regularMaterial)
+                }
+                Divider()
+            }
+            .background(
+                GeometryReader { geo in
+                    Color.clear.onAppear {
+                        stickyOverlayHeight = geo.size.height
+                    }
+                    .onChange(of: geo.size.height) { _, newHeight in
+                        stickyOverlayHeight = newHeight
+                    }
+                }
+            )
+        } else {
+            Color.clear.frame(height: 0)
+                .onAppear { stickyOverlayHeight = 0 }
+        }
+    }
+    
+    /// Recursively collects all blocks with their depth for display info
+    private func allBlocks(from blocks: [IntervalBlock], depth: Int = 0) -> [(block: IntervalBlock, depth: Int)] {
+        var result: [(IntervalBlock, Int)] = []
+        for block in blocks.sorted(by: { $0.sortOrder < $1.sortOrder }) {
+            result.append((block, depth))
+            result.append(contentsOf: allBlocks(from: block.childBlocks, depth: depth + 1))
+        }
+        return result
+    }
+    
+    /// Determines which block headers should be pinned at the top
+    private var pinnedHeaders: [BlockHeaderInfo] {
+        let pinThreshold = listTopEdge + stickyOverlayHeight
+        var pinned: [BlockHeaderInfo] = []
+        
+        let activeTemplate = editableTemplate ?? template
+        
+        for (block, depth) in allBlocks(from: activeTemplate.blocks) {
+            guard let minY = headerPositions[block.id] else { continue }
+            let contentBottom = contentBottoms[block.id] ?? minY
+            if minY < pinThreshold && contentBottom > pinThreshold {
+                pinned.append(BlockHeaderInfo(
+                    id: block.id,
+                    name: block.name ?? "Unnamed Block",
+                    depth: depth,
+                    color: depthColor(depth),
+                    repeatCount: block.repeatCount
+                ))
+            }
+        }
+        
+        pinned.sort { $0.depth < $1.depth }
+        return pinned
     }
     
     private func markChanged() {
@@ -543,14 +703,20 @@ struct TemplateEditorView: View {
 
 struct BlockEditorRow: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.allBlocksCollapsed) private var allCollapsed
+    @Environment(\.draggingBlockID) private var draggingBlockID
     @Bindable var block: IntervalBlock
     let template: WorkoutTemplate
     let depth: Int
     let isEditing: Bool
     var onChanged: () -> Void
+    var onHeaderPosition: (UUID, CGFloat) -> Void = { _, _ in }
+    var onContentBottom: (UUID, CGFloat) -> Void = { _, _ in }
+    var onDragEnd: () -> Void = {}
     
     @State private var isExpanded = true
     @State private var editingBlockName = false
+    @State private var wasExpandedBeforeDrag = true
     
     private var blockColor: Color {
         depthColor(depth)
@@ -637,7 +803,10 @@ struct BlockEditorRow: View {
                         template: template,
                         depth: depth + 1,
                         isEditing: isEditing,
-                        onChanged: onChanged
+                        onChanged: onChanged,
+                        onHeaderPosition: onHeaderPosition,
+                        onContentBottom: onContentBottom,
+                        onDragEnd: onDragEnd
                     )
                 }
             }
@@ -657,6 +826,7 @@ struct BlockEditorRow: View {
                     }
                 }
                 onChanged()
+                onDragEnd()
             }
             .moveDisabled(!isEditing)
             
@@ -692,6 +862,20 @@ struct BlockEditorRow: View {
                     .deleteDisabled(true)
                 }
             }
+            
+            // Sentinel to track the bottom of this block's content
+            Rectangle()
+                .fill(.clear)
+                .frame(height: 1)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets())
+                .onGeometryChange(for: CGFloat.self) { geo in
+                    geo.frame(in: .global).maxY
+                } action: { maxY in
+                    onContentBottom(block.id, maxY)
+                }
+                .moveDisabled(true)
+                .deleteDisabled(true)
         } label: {
             // Block title — this is what the drag handle aligns with
             HStack(spacing: 6) {
@@ -738,8 +922,26 @@ struct BlockEditorRow: View {
                     .buttonStyle(.borderless)
                 }
             }
+            .onGeometryChange(for: CGFloat.self) { geo in
+                geo.frame(in: .global).minY
+            } action: { minY in
+                onHeaderPosition(block.id, minY)
+            }
         }
         .padding(.leading, CGFloat(depth) * 4)
+        .onChange(of: allCollapsed) { _, collapsed in
+            isExpanded = !collapsed
+        }
+        .onChange(of: draggingBlockID) { oldValue, newValue in
+            if newValue == block.id && oldValue != block.id {
+                // Drag started for this block — save state and collapse
+                wasExpandedBeforeDrag = isExpanded
+                isExpanded = false
+            } else if oldValue == block.id && newValue == nil {
+                // Drag ended for this block — restore previous expansion state
+                isExpanded = wasExpandedBeforeDrag
+            }
+        }
     }
     
     // MARK: - Actions
