@@ -242,12 +242,17 @@ struct TemplateEditorView: View {
     @State private var allCollapsed = false
     /// Block IDs whose content is visually hidden during drag (rows still exist).
     @State private var hiddenBlockIDs: Set<UUID> = []
+    /// The block ID to scroll to after collapse/expand, and the viewport anchor to use.
+    @State private var scrollAnchorBlockID: UUID?
+    @State private var scrollAnchorPoint: UnitPoint = .center
+    /// Fallback timer to clear hiddenBlockIDs when drag is cancelled (no .onMove fires).
+    @State private var dragCancelWorkItem: DispatchWorkItem?
     #if os(iOS)
     @State private var editMode: EditMode = .inactive
     #endif
     @State private var headerPositions: [UUID: CGFloat] = [:]  // block id -> header minY
     @State private var contentBottoms: [UUID: CGFloat] = [:]
-    @State private var listTopEdge: CGFloat = 0
+    @State private var listMetrics: (top: CGFloat, height: CGFloat) = (0, 0)
     @State private var stickyOverlayHeight: CGFloat = 0
     
     // Child context for transactional editing
@@ -275,7 +280,13 @@ struct TemplateEditorView: View {
             #endif
             if !editing {
                 hiddenBlockIDs.removeAll()
+                dragCancelWorkItem?.cancel()
             }
+        }
+        .onChange(of: allCollapsed) {
+            // Clear any lingering hidden rows from a previous drag
+            hiddenBlockIDs.removeAll()
+            dragCancelWorkItem?.cancel()
         }
     }
     
@@ -348,6 +359,7 @@ struct TemplateEditorView: View {
     
     @ViewBuilder
     private func editorContent(for template: WorkoutTemplate) -> some View {
+        ScrollViewReader { scrollProxy in
         List {
                 // Update banner for downloaded routines
                 updateBannerSection(for: template)
@@ -430,10 +442,29 @@ struct TemplateEditorView: View {
                             onContentBottom: { id, maxY in
                                 contentBottoms[id] = maxY
                             },
+                            onDragStarted: { draggedID in
+                                // Compute where the block header currently is as a
+                                // fraction of the list height, so we can scroll back
+                                // to that position after collapse.
+                                setScrollAnchor(for: draggedID)
+                                
+                                // Start a fallback timer to clear hiddenBlockIDs
+                                // in case the drag is cancelled (no .onMove fires).
+                                dragCancelWorkItem?.cancel()
+                                let workItem = DispatchWorkItem {
+                                    hiddenBlockIDs.removeAll()
+                                }
+                                dragCancelWorkItem = workItem
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: workItem)
+                            },
+                            onDragCompleted: {
+                                dragCancelWorkItem?.cancel()
+                            },
                             hiddenBlockIDs: $hiddenBlockIDs
                         )
                     }
                     .onMove { source, destination in
+                        dragCancelWorkItem?.cancel()
                         var sortedBlocks = template.blocks.sorted { $0.sortOrder < $1.sortOrder }
                         guard source.allSatisfy({ $0 >= 0 && $0 < sortedBlocks.count }),
                               destination >= 0 && destination <= sortedBlocks.count else {
@@ -442,6 +473,11 @@ struct TemplateEditorView: View {
                         sortedBlocks.move(fromOffsets: source, toOffset: destination)
                         for (index, block) in sortedBlocks.enumerated() {
                             block.sortOrder = index
+                        }
+                        // Set scroll anchor for the moved block so expand doesn't jump
+                        let movedIndex = destination > source.first! ? destination - 1 : destination
+                        if movedIndex >= 0 && movedIndex < sortedBlocks.count {
+                            setScrollAnchor(for: sortedBlocks[movedIndex].id)
                         }
                         markChanged()
                         hiddenBlockIDs.removeAll()
@@ -481,11 +517,29 @@ struct TemplateEditorView: View {
                 }
             }
         .environment(\.defaultMinListRowHeight, 0)
-        .onGeometryChange(for: CGFloat.self) { geo in
-            geo.safeAreaInsets.top
-        } action: { top in
-            listTopEdge = top
+        .onGeometryChange(for: [CGFloat].self) { geo in
+            [geo.safeAreaInsets.top, geo.size.height]
+        } action: { values in
+            listMetrics = (values[0], values[1])
         }
+        .onChange(of: hiddenBlockIDs) { oldIDs, newIDs in
+            if let anchorID = scrollAnchorBlockID, !newIDs.isEmpty {
+                // Collapsing: scroll to keep dragged block in place
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    scrollProxy.scrollTo(anchorID, anchor: scrollAnchorPoint)
+                }
+                scrollAnchorBlockID = nil
+            } else if newIDs.isEmpty && !oldIDs.isEmpty, let anchorID = scrollAnchorBlockID {
+                // Expanding (drop completed): scroll to keep moved block in place
+                DispatchQueue.main.async {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        scrollProxy.scrollTo(anchorID, anchor: scrollAnchorPoint)
+                    }
+                    scrollAnchorBlockID = nil
+                }
+            }
+        }
+        } // ScrollViewReader
         .navigationTitle(isEditing ? "Edit Routine" : template.name)
         .navigationBarBackButtonHidden(isEditing)
         #if os(iOS)
@@ -667,7 +721,7 @@ struct TemplateEditorView: View {
     
     /// Determines which block headers should be pinned at the top
     private var pinnedHeaders: [BlockHeaderInfo] {
-        let pinThreshold = listTopEdge + stickyOverlayHeight
+        let pinThreshold = listMetrics.top + stickyOverlayHeight
         var pinned: [BlockHeaderInfo] = []
         
         let activeTemplate = editableTemplate ?? template
@@ -688,6 +742,18 @@ struct TemplateEditorView: View {
         
         pinned.sort { $0.depth < $1.depth }
         return pinned
+    }
+    
+    /// Record the scroll anchor so the list scrolls to keep this block at its current position.
+    private func setScrollAnchor(for blockID: UUID) {
+        if let headerY = headerPositions[blockID], listMetrics.height > 0 {
+            let fraction = (headerY - listMetrics.top) / listMetrics.height
+            let clamped = min(max(fraction, 0), 1)
+            scrollAnchorPoint = UnitPoint(x: 0.5, y: clamped)
+        } else {
+            scrollAnchorPoint = .center
+        }
+        scrollAnchorBlockID = blockID
     }
     
     private func markChanged() {
@@ -747,6 +813,8 @@ struct BlockEditorRow: View {
     var onChanged: () -> Void
     var onHeaderPosition: (UUID, CGFloat) -> Void = { _, _ in }
     var onContentBottom: (UUID, CGFloat) -> Void = { _, _ in }
+    var onDragStarted: (UUID) -> Void = { _ in }
+    var onDragCompleted: () -> Void = {}
     @Binding var hiddenBlockIDs: Set<UUID>
     @State private var isExpanded = true
     @State private var editingBlockName = false
@@ -846,12 +914,15 @@ struct BlockEditorRow: View {
                         onChanged: onChanged,
                         onHeaderPosition: onHeaderPosition,
                         onContentBottom: onContentBottom,
+                        onDragStarted: onDragStarted,
+                        onDragCompleted: onDragCompleted,
                         hiddenBlockIDs: $hiddenBlockIDs
                     )
                     .hiddenRow(isContentHidden)
                 }
             }
             .onMove { source, destination in
+                onDragCompleted()
                 var children = block.sortedChildren
                 guard source.allSatisfy({ $0 >= 0 && $0 < children.count }),
                       destination >= 0 && destination <= children.count else {
@@ -971,6 +1042,8 @@ struct BlockEditorRow: View {
                 onHeaderPosition(block.id, minY)
             }
             .onDrag {
+                // Notify parent to set up scroll anchor before collapse
+                onDragStarted(block.id)
                 // Populate hiddenBlockIDs with all sibling IDs (same parent)
                 // so their content is replaced with zero-height placeholders.
                 // This keeps UICollectionView row count stable (no crash).
