@@ -174,6 +174,8 @@ Adding new fields to models requires updating BOTH iOS and watch copies.
 
 ## Rules
 
+Reread this document with every prompt, and always follow the directions contained inside.
+
 ### Design Decisions
 - **NEVER** make design decisions without explicitly checking with the user first. Always ask before removing features, changing approaches, or abandoning a requested feature. This is non-negotiable.
 
