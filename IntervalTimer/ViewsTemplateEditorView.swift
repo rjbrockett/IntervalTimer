@@ -460,10 +460,14 @@ struct TemplateEditorView: View {
                             isEditing: isEditing,
                             onChanged: markChanged,
                             onHeaderPosition: { id, minY in
-                                headerPositions[id] = minY
+                                if headerPositions[id] != minY {
+                                    headerPositions[id] = minY
+                                }
                             },
                             onContentBottom: { id, maxY in
-                                contentBottoms[id] = maxY
+                                if contentBottoms[id] != maxY {
+                                    contentBottoms[id] = maxY
+                                }
                             },
                             onDragStarted: { draggedID in
                                 startDrag(blockID: draggedID, in: template)
@@ -476,6 +480,13 @@ struct TemplateEditorView: View {
                             },
                             onDragEnded: {
                                 commitDrag(in: template)
+                            },
+                            onScrollTo: { id in
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    withAnimation {
+                                        scrollProxy.scrollTo(id, anchor: .bottom)
+                                    }
+                                }
                             },
                             hiddenBlockIDs: $hiddenBlockIDs,
                             activeDragBlockID: activeDrag?.blockID
@@ -496,6 +507,11 @@ struct TemplateEditorView: View {
                             )
                             template.blocks.append(newBlock)
                             markChanged()
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                withAnimation {
+                                    scrollProxy.scrollTo(newBlock.id, anchor: .bottom)
+                                }
+                            }
                         }) {
                             Label("Add Block", systemImage: "plus.circle.fill")
                         }
@@ -1135,6 +1151,7 @@ struct BlockEditorRow: View {
     var onDragStarted: (UUID) -> Void = { _ in }
     var onDragMoved: (CGPoint) -> Void = { _ in }
     var onDragEnded: () -> Void = {}
+    var onScrollTo: (UUID) -> Void = { _ in }
     @Binding var hiddenBlockIDs: Set<UUID>
     var activeDragBlockID: UUID? = nil
     @State private var isExpanded = true
@@ -1144,20 +1161,11 @@ struct BlockEditorRow: View {
         depthColor(depth)
     }
     
-    /// Whether this block should be collapsed due to an active drag
-    private var isDragCollapsed: Bool {
-        hiddenBlockIDs.contains(block.id)
-    }
+    /// Tracks what the user set before a drag collapse, so we can restore it
+    @State private var expandedBeforeDrag: Bool? = nil
     
     var body: some View {
-        DisclosureGroup(isExpanded: Binding(
-            get: { isDragCollapsed ? false : isExpanded },
-            set: { newValue in
-                if !isDragCollapsed {
-                    isExpanded = newValue
-                }
-            }
-        )) {
+        DisclosureGroup(isExpanded: $isExpanded) {
             // Block settings row (edit mode only) — pinned, not movable
             if isEditing {
                 HStack {
@@ -1246,6 +1254,7 @@ struct BlockEditorRow: View {
                         onDragStarted: onDragStarted,
                         onDragMoved: onDragMoved,
                         onDragEnded: onDragEnded,
+                        onScrollTo: onScrollTo,
                         hiddenBlockIDs: $hiddenBlockIDs,
                         activeDragBlockID: activeDragBlockID
                     )
@@ -1402,6 +1411,21 @@ struct BlockEditorRow: View {
         .onChange(of: allCollapsed) { _, collapsed in
             isExpanded = !collapsed
         }
+        .onChange(of: hiddenBlockIDs) { oldIDs, newIDs in
+            let wasHidden = oldIDs.contains(block.id)
+            let isNowHidden = newIDs.contains(block.id)
+            if !wasHidden && isNowHidden {
+                expandedBeforeDrag = isExpanded
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    isExpanded = false
+                }
+            } else if wasHidden && !isNowHidden {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    isExpanded = expandedBeforeDrag ?? true
+                }
+                expandedBeforeDrag = nil
+            }
+        }
 
     }
     
@@ -1415,6 +1439,7 @@ struct BlockEditorRow: View {
         )
         block.intervals.append(newInterval)
         onChanged()
+        onScrollTo(newInterval.id)
     }
     
     private func addChildBlock() {
@@ -1427,6 +1452,7 @@ struct BlockEditorRow: View {
         )
         block.childBlocks.append(newBlock)
         onChanged()
+        onScrollTo(newBlock.id)
     }
     
     private func deleteBlock() {
