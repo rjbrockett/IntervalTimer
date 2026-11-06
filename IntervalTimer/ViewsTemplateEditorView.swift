@@ -28,13 +28,19 @@ private struct BlockHeaderInfo: Equatable {
 
 // MARK: - Custom Drag System
 
-/// Identifies the block being dragged and its context
+/// Identifies the item being dragged and its context
 private struct DragItem {
-    let blockID: UUID
-    let blockName: String
-    let blockColor: Color
+    enum Kind {
+        case block
+        case interval
+    }
+    let kind: Kind
+    let itemID: UUID
+    let itemName: String
+    let itemColor: Color
     let repeatCount: Int
     let depth: Int
+    /// For top-level blocks: nil. For children: the parent block's ID.
     let parentBlockID: UUID?
 }
 
@@ -470,7 +476,7 @@ struct TemplateEditorView: View {
                                 }
                             },
                             onDragStarted: { draggedID in
-                                startDrag(blockID: draggedID, in: template)
+                                startDrag(itemID: draggedID, in: template)
                             },
                             onDragMoved: { location in
                                 guard activeDrag != nil else { return }
@@ -489,7 +495,7 @@ struct TemplateEditorView: View {
                                 }
                             },
                             hiddenBlockIDs: $hiddenBlockIDs,
-                            activeDragBlockID: activeDrag?.blockID
+                            activeDragItemID: activeDrag?.itemID
                         )
                     }
                     .moveDisabled(true)
@@ -666,8 +672,8 @@ struct TemplateEditorView: View {
             // Floating drag preview anchored to finger
             if let drag = activeDrag, dragLocation != .zero {
                 DragPreviewView(
-                    name: drag.blockName,
-                    color: drag.blockColor,
+                    name: drag.itemName,
+                    color: drag.itemColor,
                     repeatCount: drag.repeatCount
                 )
                 .frame(width: listGlobalFrame.width * 0.9)
@@ -827,8 +833,33 @@ struct TemplateEditorView: View {
         return nil
     }
     
-    /// Begin a custom drag: populate activeDrag, collapse sibling blocks
-    private func startDrag(blockID: UUID, in template: WorkoutTemplate) {
+    /// Unified drag start: detects whether the item is a block or interval
+    private func startDrag(itemID: UUID, in template: WorkoutTemplate) {
+        guard activeDrag == nil else { return }
+        
+        // Check if it's a block
+        if findBlockContext(id: itemID, in: template) != nil {
+            startBlockDrag(blockID: itemID, in: template)
+            return
+        }
+        
+        // Check if it's an interval — find its parent block
+        for (block, depth) in allBlocks(from: template.blocks) {
+            if let interval = block.intervals.first(where: { $0.id == itemID }) {
+                startChildDrag(
+                    childID: interval.id,
+                    childName: interval.name,
+                    kind: .interval,
+                    parentBlock: block,
+                    depth: depth
+                )
+                return
+            }
+        }
+    }
+    
+    /// Begin a custom drag for a top-level or nested block
+    private func startBlockDrag(blockID: UUID, in template: WorkoutTemplate) {
         guard activeDrag == nil else { return }
         guard let ctx = findBlockContext(id: blockID, in: template) else { return }
         
@@ -837,14 +868,14 @@ struct TemplateEditorView: View {
         generator.impactOccurred()
         #endif
         
-        // Set drag state without animation
         var transaction = Transaction()
         transaction.animation = nil
         withTransaction(transaction) {
             activeDrag = DragItem(
-                blockID: blockID,
-                blockName: ctx.block.name ?? "Unnamed Block",
-                blockColor: depthColor(ctx.depth),
+                kind: .block,
+                itemID: blockID,
+                itemName: ctx.block.name ?? "Unnamed Block",
+                itemColor: depthColor(ctx.depth),
                 repeatCount: ctx.block.repeatCount,
                 depth: ctx.depth,
                 parentBlockID: ctx.parentBlockID
@@ -861,6 +892,43 @@ struct TemplateEditorView: View {
             if let block = findBlock(id: siblingID, in: template) {
                 collectAllDescendantIDs(of: block, into: &idsToHide)
             }
+        }
+        withAnimation(.easeInOut(duration: 0.25)) {
+            hiddenBlockIDs = idsToHide
+        }
+    }
+    
+    /// Begin a custom drag for a child item (interval or sub-block) within a parent block
+    private func startChildDrag(childID: UUID, childName: String, kind: DragItem.Kind, parentBlock: IntervalBlock, depth: Int) {
+        guard activeDrag == nil else { return }
+        
+        #if os(iOS)
+        let generator = UIImpactFeedbackGenerator(style: .medium)
+        generator.impactOccurred()
+        #endif
+        
+        var transaction = Transaction()
+        transaction.animation = nil
+        withTransaction(transaction) {
+            activeDrag = DragItem(
+                kind: kind,
+                itemID: childID,
+                itemName: childName,
+                itemColor: depthColor(depth),
+                repeatCount: kind == .block ? (findBlock(id: childID, in: editableTemplate ?? template)?.repeatCount ?? 1) : 0,
+                depth: depth,
+                parentBlockID: parentBlock.id
+            )
+            if let headerY = headerPositions[childID] {
+                dragLocation = CGPoint(x: listGlobalFrame.midX, y: headerY + 20)
+            }
+        }
+        
+        // Collapse child sub-blocks within the parent (not the parent itself)
+        var idsToHide = Set<UUID>()
+        for child in parentBlock.childBlocks {
+            idsToHide.insert(child.id)
+            collectAllDescendantIDs(of: child, into: &idsToHide)
         }
         withAnimation(.easeInOut(duration: 0.25)) {
             hiddenBlockIDs = idsToHide
@@ -892,137 +960,151 @@ struct TemplateEditorView: View {
         }
     }
     
+    /// Get the list of sibling IDs for the current drag context
+    private func siblingIDs(for drag: DragItem, in template: WorkoutTemplate) -> [UUID] {
+        if let pid = drag.parentBlockID,
+           let parent = findBlock(id: pid, in: template) {
+            if drag.kind == .block && drag.parentBlockID == nil {
+                return template.blocks.sorted { $0.sortOrder < $1.sortOrder }.map(\.id)
+            }
+            // Children within a parent block (intervals + sub-blocks)
+            return parent.sortedChildren.map(\.id)
+        } else {
+            // Top-level blocks
+            return template.blocks.sorted { $0.sortOrder < $1.sortOrder }.map(\.id)
+        }
+    }
+    
     /// Compute which gap the user is hovering over
     private func computeDropTarget(at location: CGPoint) -> DropTarget? {
         guard let drag = activeDrag else { return nil }
-        
-        // Get sibling blocks based on drag context
         let activeTemplate = editableTemplate ?? template
-        let siblings: [IntervalBlock]
-        let parentID: UUID?
+        let ids = siblingIDs(for: drag, in: activeTemplate)
         
-        if let pid = drag.parentBlockID,
-           let parent = findBlock(id: pid, in: activeTemplate) {
-            siblings = parent.childBlocks.sorted { $0.sortOrder < $1.sortOrder }
-            parentID = pid
-        } else {
-            siblings = activeTemplate.blocks.sorted { $0.sortOrder < $1.sortOrder }
-            parentID = nil
-        }
-        
-        // Find closest gap between headers
         var bestIndex = 0
         var bestDistance: CGFloat = .infinity
         
-        for (i, block) in siblings.enumerated() {
-            guard let headerY = headerPositions[block.id] else { continue }
+        for (i, id) in ids.enumerated() {
+            guard let headerY = headerPositions[id] else { continue }
             let distance = abs(location.y - headerY)
             if distance < bestDistance {
                 bestDistance = distance
-                // If above the midpoint of this header, insert before; otherwise after
                 bestIndex = location.y < headerY ? i : i + 1
             }
         }
         
-        // Also check "after the last block"
-        if let lastBlock = siblings.last,
-           let lastY = headerPositions[lastBlock.id] {
+        if let lastID = ids.last,
+           let lastY = headerPositions[lastID] {
             if location.y > lastY + 20 {
-                bestIndex = siblings.count
+                bestIndex = ids.count
             }
         }
         
-        return DropTarget(parentBlockID: parentID, insertionIndex: bestIndex)
+        return DropTarget(parentBlockID: drag.parentBlockID, insertionIndex: bestIndex)
     }
     
     /// Y position for the drop indicator line
     private func computeIndicatorY(for target: DropTarget, in template: WorkoutTemplate) -> CGFloat {
-        let siblings: [IntervalBlock]
-        
-        if let pid = target.parentBlockID,
-           let parent = findBlock(id: pid, in: template) {
-            siblings = parent.childBlocks.sorted { $0.sortOrder < $1.sortOrder }
-        } else {
-            siblings = template.blocks.sorted { $0.sortOrder < $1.sortOrder }
-        }
+        guard let drag = activeDrag else { return 0 }
+        let ids = siblingIDs(for: drag, in: template)
         
         if target.insertionIndex == 0 {
-            // Before the first block
-            if let first = siblings.first, let y = headerPositions[first.id] {
+            if let first = ids.first, let y = headerPositions[first] {
                 return y - 2
             }
-        } else if target.insertionIndex >= siblings.count {
-            // After the last block
-            if let last = siblings.last, let y = headerPositions[last.id] {
+        } else if target.insertionIndex >= ids.count {
+            if let last = ids.last, let y = headerPositions[last] {
                 return y + 40
             }
         } else {
-            // Between two blocks
-            let above = siblings[target.insertionIndex - 1]
-            let below = siblings[target.insertionIndex]
-            if let yA = headerPositions[above.id], let yB = headerPositions[below.id] {
+            let aboveID = ids[target.insertionIndex - 1]
+            let belowID = ids[target.insertionIndex]
+            if let yA = headerPositions[aboveID], let yB = headerPositions[belowID] {
                 return (yA + yB) / 2 + 15
             }
         }
         return 0
     }
     
-    /// Commit the drag: reorder blocks, then cleanup
+    /// Commit the drag: reorder items, then cleanup
     private func commitDrag(in template: WorkoutTemplate) {
         guard let drag = activeDrag, let target = dropTarget else {
             cancelDrag()
             return
         }
         
-        guard let ctx = findBlockContext(id: drag.blockID, in: template) else {
-            cancelDrag()
-            return
-        }
-        
-        // Skip no-op: same parent, same position or adjacent
-        let isNoOp = target.parentBlockID == ctx.parentBlockID &&
-            (target.insertionIndex == ctx.indexInSiblings ||
-             target.insertionIndex == ctx.indexInSiblings + 1)
-        
-        if !isNoOp {
-            // Get siblings list
-            var siblings: [IntervalBlock]
-            if let pid = ctx.parentBlockID,
-               let parent = findBlock(id: pid, in: template) {
-                siblings = parent.childBlocks.sorted { $0.sortOrder < $1.sortOrder }
-            } else {
-                siblings = template.blocks.sorted { $0.sortOrder < $1.sortOrder }
-            }
-            
-            // Move the block
-            guard ctx.indexInSiblings < siblings.count else {
+        if let pid = drag.parentBlockID,
+           let parentBlock = findBlock(id: pid, in: template) {
+            // Dragging a child (interval or sub-block) within a parent block
+            var children = parentBlock.sortedChildren
+            guard let currentIndex = children.firstIndex(where: { $0.id == drag.itemID }) else {
                 cancelDrag()
                 return
             }
             
-            siblings.remove(at: ctx.indexInSiblings)
-            let adjustedIndex = target.insertionIndex > ctx.indexInSiblings
-                ? target.insertionIndex - 1
-                : target.insertionIndex
-            let clampedIndex = min(adjustedIndex, siblings.count)
-            siblings.insert(ctx.block, at: clampedIndex)
+            let isNoOp = target.insertionIndex == currentIndex || target.insertionIndex == currentIndex + 1
             
-            // Update sortOrders
-            for (i, block) in siblings.enumerated() {
-                block.sortOrder = i
+            if !isNoOp {
+                let item = children.remove(at: currentIndex)
+                let adjusted = target.insertionIndex > currentIndex
+                    ? target.insertionIndex - 1
+                    : target.insertionIndex
+                let clamped = min(adjusted, children.count)
+                children.insert(item, at: clamped)
+                
+                for (i, child) in children.enumerated() {
+                    switch child {
+                    case .interval(let interval): interval.sortOrder = i
+                    case .childBlock(let block): block.sortOrder = i
+                    }
+                }
+                
+                markChanged()
+                #if os(iOS)
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                #endif
+            } else {
+                #if os(iOS)
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                #endif
+            }
+        } else {
+            // Dragging a top-level block
+            guard let ctx = findBlockContext(id: drag.itemID, in: template) else {
+                cancelDrag()
+                return
             }
             
-            markChanged()
+            let isNoOp = target.insertionIndex == ctx.indexInSiblings ||
+                target.insertionIndex == ctx.indexInSiblings + 1
             
-            #if os(iOS)
-            let generator = UINotificationFeedbackGenerator()
-            generator.notificationOccurred(.success)
-            #endif
-        } else {
-            #if os(iOS)
-            let generator = UIImpactFeedbackGenerator(style: .light)
-            generator.impactOccurred()
-            #endif
+            if !isNoOp {
+                var siblings = template.blocks.sorted { $0.sortOrder < $1.sortOrder }
+                guard ctx.indexInSiblings < siblings.count else {
+                    cancelDrag()
+                    return
+                }
+                
+                siblings.remove(at: ctx.indexInSiblings)
+                let adjusted = target.insertionIndex > ctx.indexInSiblings
+                    ? target.insertionIndex - 1
+                    : target.insertionIndex
+                let clamped = min(adjusted, siblings.count)
+                siblings.insert(ctx.block, at: clamped)
+                
+                for (i, block) in siblings.enumerated() {
+                    block.sortOrder = i
+                }
+                
+                markChanged()
+                #if os(iOS)
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                #endif
+            } else {
+                #if os(iOS)
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                #endif
+            }
         }
         
         cleanupDrag()
@@ -1153,7 +1235,7 @@ struct BlockEditorRow: View {
     var onDragEnded: () -> Void = {}
     var onScrollTo: (UUID) -> Void = { _ in }
     @Binding var hiddenBlockIDs: Set<UUID>
-    var activeDragBlockID: UUID? = nil
+    var activeDragItemID: UUID? = nil
     @State private var isExpanded = true
     @State private var editingBlockName = false
     
@@ -1238,7 +1320,12 @@ struct BlockEditorRow: View {
                         template: template,
                         depth: depth,
                         isEditing: isEditing,
-                        onChanged: onChanged
+                        onChanged: onChanged,
+                        onDragStarted: onDragStarted,
+                        onDragMoved: onDragMoved,
+                        onDragEnded: onDragEnded,
+                        onHeaderPosition: onHeaderPosition,
+                        activeDragItemID: activeDragItemID
                     )
                     
                     
@@ -1256,29 +1343,12 @@ struct BlockEditorRow: View {
                         onDragEnded: onDragEnded,
                         onScrollTo: onScrollTo,
                         hiddenBlockIDs: $hiddenBlockIDs,
-                        activeDragBlockID: activeDragBlockID
+                        activeDragItemID: activeDragItemID
                     )
                     
                 }
             }
-            .onMove { source, destination in
-                var children = block.sortedChildren
-                guard source.allSatisfy({ $0 >= 0 && $0 < children.count }),
-                      destination >= 0 && destination <= children.count else {
-                    return
-                }
-                children.move(fromOffsets: source, toOffset: destination)
-                for (index, child) in children.enumerated() {
-                    switch child {
-                    case .interval(let interval):
-                        interval.sortOrder = index
-                    case .childBlock(let childBlock):
-                        childBlock.sortOrder = index
-                    }
-                }
-                onChanged()
-            }
-            .moveDisabled(!isEditing)
+            .moveDisabled(true)
             
             // Add buttons (edit mode only) — pinned, not movable
             if isEditing {
@@ -1407,7 +1477,7 @@ struct BlockEditorRow: View {
             }
         }
         .padding(.leading, CGFloat(depth) * 4)
-        .opacity(activeDragBlockID == block.id ? 0 : 1)
+        .opacity(activeDragItemID == block.id ? 0 : 1)
         .onChange(of: allCollapsed) { _, collapsed in
             isExpanded = !collapsed
         }
@@ -1639,6 +1709,11 @@ struct IntervalRowView: View {
     let depth: Int
     let isEditing: Bool
     var onChanged: () -> Void
+    var onDragStarted: (UUID) -> Void = { _ in }
+    var onDragMoved: (CGPoint) -> Void = { _ in }
+    var onDragEnded: () -> Void = {}
+    var onHeaderPosition: (UUID, CGFloat) -> Void = { _, _ in }
+    var activeDragItemID: UUID? = nil
     
     @State private var editingName = false
     @State private var showingDurationPicker = false
@@ -1761,6 +1836,36 @@ struct IntervalRowView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
+                
+                // Custom drag handle
+                Image(systemName: "line.3.horizontal")
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 4)
+                    .padding(.vertical, 8)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        LongPressGesture(minimumDuration: 0.1)
+                            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .global))
+                            .onChanged { value in
+                                switch value {
+                                case .second(true, let drag):
+                                    onDragStarted(interval.id)
+                                    if let drag {
+                                        onDragMoved(drag.location)
+                                    }
+                                default:
+                                    break
+                                }
+                            }
+                            .onEnded { _ in
+                                onDragEnded()
+                            }
+                    )
+            }
+            .onGeometryChange(for: CGFloat.self) { geo in
+                geo.frame(in: .global).minY
+            } action: { minY in
+                onHeaderPosition(interval.id, minY)
             }
             
             // Distance tracking
@@ -1807,6 +1912,7 @@ struct IntervalRowView: View {
                 }
             }
         }
+        .opacity(activeDragItemID == interval.id ? 0 : 1)
     }
     
     private func duplicateInterval() {
