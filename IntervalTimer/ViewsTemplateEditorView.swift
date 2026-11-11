@@ -251,7 +251,17 @@ private let maxNestingDepth = 2
 private class PositionStorage {
     var headerPositions: [UUID: CGFloat] = [:]
     var contentBottoms: [UUID: CGFloat] = [:]
+    var autoScrollSpeed: CGFloat = 0
+    var isDragging: Bool = false
 }
+
+#if os(iOS)
+private class DisplayLinkTarget: NSObject {
+    let action: () -> Void
+    init(action: @escaping () -> Void) { self.action = action }
+    @objc func tick() { action() }
+}
+#endif
 
 
 
@@ -285,6 +295,9 @@ struct TemplateEditorView: View {
     @State private var dragLocation: CGPoint = .zero
     @State private var dropTarget: DropTarget?
     @State private var autoScrollTimer: Timer?
+    #if os(iOS)
+    @State private var displayLink: CADisplayLink?
+    #endif
     @State private var dragStartTime: Date?
     @State private var listGlobalFrame: CGRect = .zero
     /// Current pinned headers, updated by scroll geometry change
@@ -937,6 +950,7 @@ struct TemplateEditorView: View {
         guard let ctx = findBlockContext(id: blockID, in: template) else { return }
         
         dragStartTime = Date()
+        positionStorage.isDragging = true
         
         #if os(iOS)
         let generator = UIImpactFeedbackGenerator(style: .medium)
@@ -977,6 +991,7 @@ struct TemplateEditorView: View {
         guard activeDrag == nil else { return }
         
         dragStartTime = Date()
+        positionStorage.isDragging = true
         
         #if os(iOS)
         let generator = UIImpactFeedbackGenerator(style: .medium)
@@ -1203,8 +1218,8 @@ struct TemplateEditorView: View {
             dropTarget = nil
             dragLocation = .zero
             dragStartTime = nil
-            autoScrollTimer?.invalidate()
-            autoScrollTimer = nil
+            positionStorage.isDragging = false
+            stopAutoScroll()
         }
         withAnimation(.easeInOut(duration: 0.25)) {
             hiddenBlockIDs.removeAll()
@@ -1224,8 +1239,7 @@ struct TemplateEditorView: View {
     private func updateAutoScroll(at location: CGPoint, scrollProxy: ScrollViewProxy) {
         // Skip auto-scroll for 0.4s after drag starts (collapse + anchor settle)
         if let startTime = dragStartTime, Date().timeIntervalSince(startTime) < 0.4 {
-            autoScrollTimer?.invalidate()
-            autoScrollTimer = nil
+            stopAutoScroll()
             return
         }
         
@@ -1233,54 +1247,72 @@ struct TemplateEditorView: View {
         let topEdge = listGlobalFrame.minY + zoneSize
         let bottomEdge = listGlobalFrame.maxY - zoneSize
         
-        let inTopZone = location.y < topEdge
-        let inBottomZone = location.y > bottomEdge
-        
-        if inTopZone || inBottomZone {
-            // Start auto-scroll if not already running
-            guard autoScrollTimer == nil else { return }
-            autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
-                guard activeDrag != nil else { return }
-                
-                // Recompute zones from current frame (viewport may have shifted)
-                let currentZoneSize = listGlobalFrame.height * 0.1
-                let currentTopEdge = listGlobalFrame.minY + currentZoneSize
-                let currentBottomEdge = listGlobalFrame.maxY - currentZoneSize
-                
-                let activeTemplate = editableTemplate ?? template
-                
-                if dragLocation.y < currentTopEdge {
-                    // Scroll up — use headerPositions (items above are already laid out)
-                    let sortedItems = headerPositions.sorted { $0.value < $1.value }
-                    if let target = sortedItems.last(where: { $0.value < listGlobalFrame.minY }) {
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            scrollProxy.scrollTo(target.key)
-                        }
-                    }
-                } else if dragLocation.y > currentBottomEdge {
-                    // Scroll down — use model order since off-screen items aren't in headerPositions
-                    let allIDs = orderedBlockIDs(in: activeTemplate)
-                    let visibleIDs = headerPositions.filter { $0.value <= listGlobalFrame.maxY }
-                    if let lastVisibleID = allIDs.last(where: { visibleIDs.keys.contains($0) }),
-                       let lastVisibleIndex = allIDs.firstIndex(of: lastVisibleID),
-                       lastVisibleIndex + 1 < allIDs.count {
-                        let nextID = allIDs[lastVisibleIndex + 1]
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            scrollProxy.scrollTo(nextID)
-                        }
-                    }
-                } else {
-                    // Finger moved out of zones between ticks — stop
-                    autoScrollTimer?.invalidate()
-                    autoScrollTimer = nil
-                }
-            }
+        if location.y < topEdge {
+            let depth = (topEdge - location.y) / zoneSize
+            positionStorage.autoScrollSpeed = -2.4 * min(depth, 1.0)
+            startDisplayLinkIfNeeded()
+        } else if location.y > bottomEdge {
+            let depth = (location.y - bottomEdge) / zoneSize
+            positionStorage.autoScrollSpeed = 2.4 * min(depth, 1.0)
+            startDisplayLinkIfNeeded()
         } else {
-            // Outside edge zones, stop auto-scroll
-            autoScrollTimer?.invalidate()
-            autoScrollTimer = nil
+            stopAutoScroll()
         }
     }
+    
+    #if os(iOS)
+    private func startDisplayLinkIfNeeded() {
+        guard displayLink == nil else { return }
+        let storage = positionStorage
+        guard let scrollView = findUIScrollView() else { return }
+        let link = CADisplayLink(target: DisplayLinkTarget { [storage, weak scrollView] in
+            guard let scrollView, storage.isDragging, storage.autoScrollSpeed != 0 else { return }
+            
+            var offset = scrollView.contentOffset
+            offset.y += storage.autoScrollSpeed
+            let maxY = max(scrollView.contentSize.height - scrollView.bounds.height + scrollView.contentInset.bottom, 0)
+            let minY = -scrollView.contentInset.top
+            offset.y = min(max(offset.y, minY), maxY)
+            scrollView.contentOffset = offset
+        }, selector: #selector(DisplayLinkTarget.tick))
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+    }
+    
+    private func stopAutoScroll() {
+        displayLink?.invalidate()
+        displayLink = nil
+        positionStorage.autoScrollSpeed = 0
+        autoScrollTimer?.invalidate()
+        autoScrollTimer = nil
+    }
+    
+    private func findUIScrollView() -> UIScrollView? {
+        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let window = windowScene.windows.first else { return nil }
+        return findScrollView(in: window)
+    }
+    
+    private func findScrollView(in view: UIView) -> UIScrollView? {
+        if let sv = view as? UIScrollView {
+            let frame = sv.convert(sv.bounds, to: nil)
+            // Match on width and that the scroll view contains our visible area
+            if abs(frame.width - listGlobalFrame.width) < 5 && frame.minY <= listGlobalFrame.minY && frame.maxY >= listGlobalFrame.maxY {
+                return sv
+            }
+        }
+        for sub in view.subviews {
+            if let found = findScrollView(in: sub) { return found }
+        }
+        return nil
+    }
+    #else
+    private func startDisplayLinkIfNeeded() {}
+    private func stopAutoScroll() {
+        autoScrollTimer?.invalidate()
+        autoScrollTimer = nil
+    }
+    #endif
     
     private func markChanged() {
         hasUnsavedChanges = true
