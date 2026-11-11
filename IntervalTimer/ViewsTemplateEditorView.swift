@@ -285,6 +285,7 @@ struct TemplateEditorView: View {
     @State private var dragLocation: CGPoint = .zero
     @State private var dropTarget: DropTarget?
     @State private var autoScrollTimer: Timer?
+    @State private var dragStartTime: Date?
     @State private var listGlobalFrame: CGRect = .zero
     /// Current pinned headers, updated by scroll geometry change
     @State private var currentPinnedHeaders: [BlockHeaderInfo] = []
@@ -512,6 +513,9 @@ struct TemplateEditorView: View {
                                     }
                                 },
                                 onDragStarted: { draggedID in
+                                    // Only run once — startDrag guards on activeDrag == nil
+                                    guard activeDrag == nil else { return }
+                                    
                                     // Capture item's viewport-relative Y before collapse shifts layout
                                     let anchorY: CGFloat
                                     if let itemY = headerPositions[draggedID] {
@@ -730,7 +734,9 @@ struct TemplateEditorView: View {
         }
         .overlay(alignment: .top) {
             VStack(spacing: 0) {
-                stickyHeaderOverlay
+                if activeDrag == nil {
+                    stickyHeaderOverlay
+                }
             }
         }
         .overlay {
@@ -930,6 +936,8 @@ struct TemplateEditorView: View {
         guard activeDrag == nil else { return }
         guard let ctx = findBlockContext(id: blockID, in: template) else { return }
         
+        dragStartTime = Date()
+        
         #if os(iOS)
         let generator = UIImpactFeedbackGenerator(style: .medium)
         generator.impactOccurred()
@@ -967,6 +975,8 @@ struct TemplateEditorView: View {
     /// Begin a custom drag for a child item (interval or sub-block) within a parent block
     private func startChildDrag(childID: UUID, childName: String, kind: DragItem.Kind, parentBlock: IntervalBlock, depth: Int) {
         guard activeDrag == nil else { return }
+        
+        dragStartTime = Date()
         
         #if os(iOS)
         let generator = UIImpactFeedbackGenerator(style: .medium)
@@ -1192,6 +1202,7 @@ struct TemplateEditorView: View {
             activeDrag = nil
             dropTarget = nil
             dragLocation = .zero
+            dragStartTime = nil
             autoScrollTimer?.invalidate()
             autoScrollTimer = nil
         }
@@ -1211,19 +1222,34 @@ struct TemplateEditorView: View {
     
     /// Auto-scroll when finger is near list edges
     private func updateAutoScroll(at location: CGPoint, scrollProxy: ScrollViewProxy) {
-        let topZone: CGFloat = 120
-        let bottomZone: CGFloat = 100
-        let topEdge = listGlobalFrame.minY + topZone
-        let bottomEdge = listGlobalFrame.maxY - bottomZone
+        // Skip auto-scroll for 0.4s after drag starts (collapse + anchor settle)
+        if let startTime = dragStartTime, Date().timeIntervalSince(startTime) < 0.4 {
+            autoScrollTimer?.invalidate()
+            autoScrollTimer = nil
+            return
+        }
         
-        if location.y < topEdge || location.y > bottomEdge {
+        let zoneSize = listGlobalFrame.height * 0.1
+        let topEdge = listGlobalFrame.minY + zoneSize
+        let bottomEdge = listGlobalFrame.maxY - zoneSize
+        
+        let inTopZone = location.y < topEdge
+        let inBottomZone = location.y > bottomEdge
+        
+        if inTopZone || inBottomZone {
             // Start auto-scroll if not already running
             guard autoScrollTimer == nil else { return }
             autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
                 guard activeDrag != nil else { return }
+                
+                // Recompute zones from current frame (viewport may have shifted)
+                let currentZoneSize = listGlobalFrame.height * 0.1
+                let currentTopEdge = listGlobalFrame.minY + currentZoneSize
+                let currentBottomEdge = listGlobalFrame.maxY - currentZoneSize
+                
                 let activeTemplate = editableTemplate ?? template
                 
-                if dragLocation.y < topEdge {
+                if dragLocation.y < currentTopEdge {
                     // Scroll up — use headerPositions (items above are already laid out)
                     let sortedItems = headerPositions.sorted { $0.value < $1.value }
                     if let target = sortedItems.last(where: { $0.value < listGlobalFrame.minY }) {
@@ -1231,10 +1257,9 @@ struct TemplateEditorView: View {
                             scrollProxy.scrollTo(target.key)
                         }
                     }
-                } else if dragLocation.y > bottomEdge {
+                } else if dragLocation.y > currentBottomEdge {
                     // Scroll down — use model order since off-screen items aren't in headerPositions
                     let allIDs = orderedBlockIDs(in: activeTemplate)
-                    // Find the last visible block (has a position within or above the viewport)
                     let visibleIDs = headerPositions.filter { $0.value <= listGlobalFrame.maxY }
                     if let lastVisibleID = allIDs.last(where: { visibleIDs.keys.contains($0) }),
                        let lastVisibleIndex = allIDs.firstIndex(of: lastVisibleID),
@@ -1244,6 +1269,10 @@ struct TemplateEditorView: View {
                             scrollProxy.scrollTo(nextID)
                         }
                     }
+                } else {
+                    // Finger moved out of zones between ticks — stop
+                    autoScrollTimer?.invalidate()
+                    autoScrollTimer = nil
                 }
             }
         } else {
