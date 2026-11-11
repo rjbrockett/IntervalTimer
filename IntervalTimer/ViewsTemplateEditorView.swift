@@ -246,6 +246,13 @@ struct DecimalTextField: UIViewRepresentable {
 
 private let maxNestingDepth = 2
 
+/// Non-reactive storage for geometry positions to avoid layout feedback loops in LazyVStack.
+/// Updates to @State from onGeometryChange cause re-renders → more geometry changes → crash.
+private class PositionStorage {
+    var headerPositions: [UUID: CGFloat] = [:]
+    var contentBottoms: [UUID: CGFloat] = [:]
+}
+
 
 
 // Depth-based color for visual nesting
@@ -279,11 +286,20 @@ struct TemplateEditorView: View {
     @State private var dropTarget: DropTarget?
     @State private var autoScrollTimer: Timer?
     @State private var listGlobalFrame: CGRect = .zero
+
     #if os(iOS)
-    @State private var editMode: EditMode = .inactive
+
     #endif
-    @State private var headerPositions: [UUID: CGFloat] = [:]  // block id -> header minY
-    @State private var contentBottoms: [UUID: CGFloat] = [:]
+    private let positionStorage = PositionStorage()
+    /// Convenience accessors — non-reactive to avoid layout feedback loops in LazyVStack
+    private var headerPositions: [UUID: CGFloat] {
+        get { positionStorage.headerPositions }
+        nonmutating set { positionStorage.headerPositions = newValue }
+    }
+    private var contentBottoms: [UUID: CGFloat] {
+        get { positionStorage.contentBottoms }
+        nonmutating set { positionStorage.contentBottoms = newValue }
+    }
     @State private var listMetrics: (top: CGFloat, height: CGFloat) = (0, 0)
     @State private var stickyOverlayHeight: CGFloat = 0
     
@@ -307,9 +323,6 @@ struct TemplateEditorView: View {
             setupChildContext()
         }
         .onChange(of: isEditing) { _, editing in
-            #if os(iOS)
-            editMode = editing ? .active : .inactive
-            #endif
             if !editing {
                 cleanupDrag()
             }
@@ -342,7 +355,7 @@ struct TemplateEditorView: View {
     @ViewBuilder
     private func updateBannerSection(for template: WorkoutTemplate) -> some View {
         if template.isDownloaded == true && template.hasAvailableUpdate == true {
-            Section {
+            sectionCard {
                 VStack(spacing: 12) {
                     HStack {
                         Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
@@ -387,174 +400,204 @@ struct TemplateEditorView: View {
     }
     
     @ViewBuilder
+    private func sectionCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            content()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        #if os(iOS)
+        .background(Color(.secondarySystemGroupedBackground))
+        #else
+        .background(Color(.controlBackgroundColor))
+        #endif
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 4)
+    }
+    
+    @ViewBuilder
     private func editorContent(for template: WorkoutTemplate) -> some View {
         ScrollViewReader { scrollProxy in
-        List {
-                // Update banner for downloaded routines
-                updateBannerSection(for: template)
-                
-                // Template name section
-                Section {
-                    if isEditing {
-                        HStack {
-                            if editingTemplateName {
-                                TextField("Routine Name", text: Binding(
-                                    get: { template.name },
-                                    set: { template.name = $0; markChanged() }
-                                ))
-                                .textFieldStyle(.roundedBorder)
-                                .onSubmit {
-                                    editingTemplateName = false
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    // Update banner for downloaded routines
+                    updateBannerSection(for: template)
+                    
+                    // Template name section
+                    sectionCard {
+                        if isEditing {
+                            HStack {
+                                if editingTemplateName {
+                                    TextField("Routine Name", text: Binding(
+                                        get: { template.name },
+                                        set: { template.name = $0; markChanged() }
+                                    ))
+                                    .textFieldStyle(.roundedBorder)
+                                    .onSubmit {
+                                        editingTemplateName = false
+                                    }
+                                } else {
+                                    Text(template.name)
+                                        .font(.title2)
+                                        .onTapGesture {
+                                            editingTemplateName = true
+                                        }
                                 }
-                            } else {
+                                Spacer()
+                                if !editingTemplateName {
+                                    Button {
+                                        editingTemplateName = true
+                                    } label: {
+                                        Label("Edit", systemImage: "pencil")
+                                            .labelStyle(.iconOnly)
+                                    }
+                                    .buttonStyle(.borderless)
+                                }
+                            }
+                        } else {
+                            VStack(alignment: .leading, spacing: 4) {
                                 Text(template.name)
                                     .font(.title2)
-                                    .onTapGesture {
-                                        editingTemplateName = true
-                                    }
-                            }
-                            Spacer()
-                            if !editingTemplateName {
-                                Button {
-                                    editingTemplateName = true
-                                } label: {
-                                    Label("Edit", systemImage: "pencil")
-                                        .labelStyle(.iconOnly)
+                                if template.isDownloaded == true, let creator = template.creatorName {
+                                    Text("by \(creator)")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
                                 }
-                                .buttonStyle(.borderless)
                             }
                         }
-                    } else {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(template.name)
-                                .font(.title2)
-                            if template.isDownloaded == true, let creator = template.creatorName {
-                                Text("by \(creator)")
+                    }
+                    
+                    // Heart Rate Zones toggle
+                    sectionCard {
+                        if isEditing {
+                            Toggle("Show Heart Rate Zones", isOn: Binding(
+                                get: { template.showHeartRateZones },
+                                set: { template.showHeartRateZones = $0; markChanged() }
+                            ))
+                            .font(.subheadline)
+                        } else if template.showHeartRateZones {
+                            HStack {
+                                Image(systemName: "heart.fill")
+                                    .foregroundStyle(.red)
+                                Text("Heart Rate Zones Enabled")
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                             }
                         }
                     }
-                }
-                
-                // Heart Rate Zones toggle
-                Section {
-                    if isEditing {
-                        Toggle("Show Heart Rate Zones", isOn: Binding(
-                            get: { template.showHeartRateZones },
-                            set: { template.showHeartRateZones = $0; markChanged() }
-                        ))
-                        .font(.subheadline)
-                    } else if template.showHeartRateZones {
-                        HStack {
-                            Image(systemName: "heart.fill")
-                                .foregroundStyle(.red)
-                            Text("Heart Rate Zones Enabled")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                
-                // Blocks — all in one section so ForEach.onMove works for reordering
-                Section {
-                    ForEach(template.sortedBlocks) { block in
-                        BlockEditorRow(
-                            block: block,
-                            template: template,
-                            depth: 0,
-                            isEditing: isEditing,
-                            onChanged: markChanged,
-                            onHeaderPosition: { id, minY in
-                                if headerPositions[id] != minY {
-                                    headerPositions[id] = minY
-                                }
-                            },
-                            onContentBottom: { id, maxY in
-                                if contentBottoms[id] != maxY {
-                                    contentBottoms[id] = maxY
-                                }
-                            },
-                            onDragStarted: { draggedID in
-                                startDrag(itemID: draggedID, in: template)
-                            },
-                            onDragMoved: { location in
-                                guard activeDrag != nil else { return }
-                                dragLocation = location
-                                dropTarget = computeDropTarget(at: location)
-                                updateAutoScroll(at: location, scrollProxy: scrollProxy)
-                            },
-                            onDragEnded: {
-                                commitDrag(in: template)
-                            },
-                            onScrollTo: { id in
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    withAnimation {
-                                        scrollProxy.scrollTo(id, anchor: .bottom)
-                                    }
-                                }
-                            },
-                            hiddenBlockIDs: $hiddenBlockIDs,
-                            activeDragItemID: activeDrag?.itemID
-                        )
-                    }
-                    .moveDisabled(true)
-                }
-                
-                // Add Block button (edit mode only)
-                if isEditing {
-                    Section {
-                        Button(action: {
-                            let newBlock = IntervalBlock(
-                                name: "Block \(template.blocks.count + 1)",
-                                repeatCount: 1,
-                                sortOrder: template.blocks.count,
-                                intervals: []
-                            )
-                            template.blocks.append(newBlock)
-                            markChanged()
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                withAnimation {
-                                    scrollProxy.scrollTo(newBlock.id, anchor: .bottom)
-                                }
+                    
+                    // Blocks section
+                    sectionCard {
+                        ForEach(template.sortedBlocks) { block in
+                            if block.sortOrder > 0 {
+                                Divider()
                             }
-                        }) {
-                            Label("Add Block", systemImage: "plus.circle.fill")
+                            BlockEditorRow(
+                                block: block,
+                                template: template,
+                                depth: 0,
+                                isEditing: isEditing,
+                                onChanged: markChanged,
+                                onHeaderPosition: { id, minY in
+                                    if headerPositions[id] != minY {
+                                        headerPositions[id] = minY
+                                    }
+                                },
+                                onContentBottom: { id, maxY in
+                                    if contentBottoms[id] != maxY {
+                                        contentBottoms[id] = maxY
+                                    }
+                                },
+                                onDragStarted: { draggedID in
+                                    startDrag(itemID: draggedID, in: template)
+                                    // After collapse, scroll to keep dragged item visible
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                        withAnimation(.easeInOut(duration: 0.2)) {
+                                            scrollProxy.scrollTo(draggedID)
+                                        }
+                                    }
+                                },
+                                onDragMoved: { location in
+                                    guard activeDrag != nil else { return }
+                                    dragLocation = location
+                                    dropTarget = computeDropTarget(at: location)
+                                    updateAutoScroll(at: location, scrollProxy: scrollProxy)
+                                },
+                                onDragEnded: {
+                                    commitDrag(in: template)
+                                },
+                                onScrollTo: { targetID in
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                        withAnimation {
+                                            scrollProxy.scrollTo(targetID)
+                                        }
+                                    }
+                                },
+                                hiddenBlockIDs: $hiddenBlockIDs,
+                                activeDragItemID: activeDrag?.itemID
+                            )
                         }
                     }
                     
-                    // Delete routine button
-                    Section {
-                        Button(role: .destructive) {
-                            showingDeleteConfirmation = true
-                        } label: {
-                            HStack {
-                                Spacer()
-                                Text("Delete Routine")
-                                Spacer()
+                    // Add Block button (edit mode only)
+                    if isEditing {
+                        sectionCard {
+                            Button(action: {
+                                let newBlock = IntervalBlock(
+                                    name: "Block \(template.blocks.count + 1)",
+                                    repeatCount: 1,
+                                    sortOrder: template.blocks.count,
+                                    intervals: []
+                                )
+                                template.blocks.append(newBlock)
+                                markChanged()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    withAnimation {
+                                        scrollProxy.scrollTo("addBlockButton", anchor: .bottom)
+                                    }
+                                }
+                            }) {
+                                Label("Add Block", systemImage: "plus.circle.fill")
+                            }
+                        }
+                        .id("addBlockButton")
+                        
+                        // Delete routine button
+                        sectionCard {
+                            Button(role: .destructive) {
+                                showingDeleteConfirmation = true
+                            } label: {
+                                HStack {
+                                    Spacer()
+                                    Text("Delete Routine")
+                                    Spacer()
+                                }
                             }
                         }
                     }
                 }
             }
-        .onGeometryChange(for: [CGFloat].self) { geo in
-            [geo.safeAreaInsets.top, geo.size.height]
-        } action: { values in
-            listMetrics = (values[0], values[1])
-        }
-        .onGeometryChange(for: CGRect.self) { geo in
-            geo.frame(in: .global)
-        } action: { frame in
-            listGlobalFrame = frame
-        }
+            .scrollDismissesKeyboard(.immediately)
+            .onGeometryChange(for: [CGFloat].self) { geo in
+                [geo.safeAreaInsets.top, geo.size.height]
+            } action: { values in
+                listMetrics = (values[0], values[1])
+            }
+            .onGeometryChange(for: CGRect.self) { geo in
+                geo.frame(in: .global)
+            } action: { frame in
+                listGlobalFrame = frame
+            }
         } // ScrollViewReader
+        #if os(iOS)
+        .background(Color(.systemGroupedBackground))
+        #else
+        .background(Color(.windowBackgroundColor))
+        #endif
         .navigationTitle(isEditing ? "Edit Routine" : template.name)
         .navigationBarBackButtonHidden(isEditing)
-        #if os(iOS)
-        .environment(\.editMode, $editMode)
-        #endif
         .environment(\.allBlocksCollapsed, allCollapsed)
-        .scrollDismissesKeyboard(.immediately)
         #if os(iOS)
         .toolbar(.hidden, for: .tabBar)
         #endif
@@ -769,6 +812,8 @@ struct TemplateEditorView: View {
         let activeTemplate = editableTemplate ?? template
         
         for (block, depth) in allBlocks(from: activeTemplate.blocks) {
+            // Skip blocks that are collapsed during drag
+            guard !hiddenBlockIDs.contains(block.id) else { continue }
             guard let minY = headerPositions[block.id] else { continue }
             let contentBottom = contentBottoms[block.id] ?? minY
             if minY < pinThreshold && contentBottom > pinThreshold {
@@ -885,7 +930,8 @@ struct TemplateEditorView: View {
             }
         }
         
-        // Collapse all sibling blocks (including the dragged one) — animated
+        // Collapse all sibling blocks (including the dragged one) — no animation
+        // to prevent the dragged item from visually shifting position
         var idsToHide = Set<UUID>()
         for siblingID in ctx.siblingIDs {
             idsToHide.insert(siblingID)
@@ -893,9 +939,7 @@ struct TemplateEditorView: View {
                 collectAllDescendantIDs(of: block, into: &idsToHide)
             }
         }
-        withAnimation(.easeInOut(duration: 0.25)) {
-            hiddenBlockIDs = idsToHide
-        }
+        hiddenBlockIDs = idsToHide
     }
     
     /// Begin a custom drag for a child item (interval or sub-block) within a parent block
@@ -925,14 +969,13 @@ struct TemplateEditorView: View {
         }
         
         // Collapse child sub-blocks within the parent (not the parent itself)
+        // No animation to prevent the dragged item from visually shifting position
         var idsToHide = Set<UUID>()
         for child in parentBlock.childBlocks {
             idsToHide.insert(child.id)
             collectAllDescendantIDs(of: child, into: &idsToHide)
         }
-        withAnimation(.easeInOut(duration: 0.25)) {
-            hiddenBlockIDs = idsToHide
-        }
+        hiddenBlockIDs = idsToHide
     }
     
     /// Find a block by ID anywhere in the template
@@ -1135,34 +1178,49 @@ struct TemplateEditorView: View {
         }
     }
     
+    /// Builds an ordered list of all block IDs in template order (depth-first)
+    private func orderedBlockIDs(in template: WorkoutTemplate) -> [UUID] {
+        var ids: [UUID] = []
+        for (block, _) in allBlocks(from: template.blocks) {
+            ids.append(block.id)
+        }
+        return ids
+    }
+    
     /// Auto-scroll when finger is near list edges
     private func updateAutoScroll(at location: CGPoint, scrollProxy: ScrollViewProxy) {
-        let edgeZone: CGFloat = 60
-        let topEdge = listGlobalFrame.minY + edgeZone
-        let bottomEdge = listGlobalFrame.maxY - edgeZone
+        let topZone: CGFloat = 120
+        let bottomZone: CGFloat = 100
+        let topEdge = listGlobalFrame.minY + topZone
+        let bottomEdge = listGlobalFrame.maxY - bottomZone
         
         if location.y < topEdge || location.y > bottomEdge {
             // Start auto-scroll if not already running
             guard autoScrollTimer == nil else { return }
-            autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
+            autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
                 guard activeDrag != nil else { return }
-                // Find the block closest to top/bottom edge and scroll toward it
                 let activeTemplate = editableTemplate ?? template
-                let allBlockList = allBlocks(from: activeTemplate.blocks)
                 
                 if dragLocation.y < topEdge {
-                    // Scroll up — find block above current position
-                    if let target = allBlockList.last(where: {
-                        (headerPositions[$0.block.id] ?? .infinity) < dragLocation.y
-                    }) {
-                        scrollProxy.scrollTo(target.block.id, anchor: .top)
+                    // Scroll up — use headerPositions (items above are already laid out)
+                    let sortedItems = headerPositions.sorted { $0.value < $1.value }
+                    if let target = sortedItems.last(where: { $0.value < listGlobalFrame.minY }) {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            scrollProxy.scrollTo(target.key)
+                        }
                     }
                 } else if dragLocation.y > bottomEdge {
-                    // Scroll down — find block below current position
-                    if let target = allBlockList.first(where: {
-                        (headerPositions[$0.block.id] ?? -.infinity) > dragLocation.y
-                    }) {
-                        scrollProxy.scrollTo(target.block.id, anchor: .bottom)
+                    // Scroll down — use model order since off-screen items aren't in headerPositions
+                    let allIDs = orderedBlockIDs(in: activeTemplate)
+                    // Find the last visible block (has a position within or above the viewport)
+                    let visibleIDs = headerPositions.filter { $0.value <= listGlobalFrame.maxY }
+                    if let lastVisibleID = allIDs.last(where: { visibleIDs.keys.contains($0) }),
+                       let lastVisibleIndex = allIDs.firstIndex(of: lastVisibleID),
+                       lastVisibleIndex + 1 < allIDs.count {
+                        let nextID = allIDs[lastVisibleIndex + 1]
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            scrollProxy.scrollTo(nextID)
+                        }
                     }
                 }
             }
@@ -1233,7 +1291,7 @@ struct BlockEditorRow: View {
     var onDragStarted: (UUID) -> Void = { _ in }
     var onDragMoved: (CGPoint) -> Void = { _ in }
     var onDragEnded: () -> Void = {}
-    var onScrollTo: (UUID) -> Void = { _ in }
+    var onScrollTo: (AnyHashable) -> Void = { _ in }
     @Binding var hiddenBlockIDs: Set<UUID>
     var activeDragItemID: UUID? = nil
     @State private var isExpanded = true
@@ -1306,12 +1364,11 @@ struct BlockEditorRow: View {
                     .buttonStyle(.borderless)
                 }
                 
-                .moveDisabled(true)
-                .deleteDisabled(true)
             }
             
             // Intervals and child blocks intermingled by sortOrder
             ForEach(block.sortedChildren) { child in
+                Divider()
                 switch child {
                 case .interval(let interval):
                     IntervalRowView(
@@ -1348,10 +1405,10 @@ struct BlockEditorRow: View {
                     
                 }
             }
-            .moveDisabled(true)
             
-            // Add buttons (edit mode only) — pinned, not movable
+            // Add buttons (edit mode only)
             if isEditing {
+                Divider()
                 Button(action: addInterval) {
                     HStack(spacing: 6) {
                         RoundedRectangle(cornerRadius: 2)
@@ -1361,11 +1418,10 @@ struct BlockEditorRow: View {
                             .font(.subheadline)
                     }
                     .contentShape(Rectangle())
+                    .padding(.vertical, 4)
                 }
                 .buttonStyle(.borderless)
-                
-                .moveDisabled(true)
-                .deleteDisabled(true)
+                .id("addInterval-\(block.id)")
                 
                 if depth < maxNestingDepth {
                     Button(action: addChildBlock) {
@@ -1377,11 +1433,10 @@ struct BlockEditorRow: View {
                                 .font(.subheadline)
                         }
                         .contentShape(Rectangle())
+                        .padding(.vertical, 4)
                     }
                     .buttonStyle(.borderless)
-                    
-                    .moveDisabled(true)
-                    .deleteDisabled(true)
+                    .id("addSubBlock-\(block.id)")
                 }
             }
             
@@ -1389,15 +1444,11 @@ struct BlockEditorRow: View {
             Rectangle()
                 .fill(.clear)
                 .frame(height: 1)
-                .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets())
                 .onGeometryChange(for: CGFloat.self) { geo in
                     geo.frame(in: .global).maxY
                 } action: { maxY in
                     onContentBottom(block.id, maxY)
                 }
-                .moveDisabled(true)
-                .deleteDisabled(true)
         } label: {
             // Block title — this is what the drag handle aligns with
             HStack(spacing: 6) {
@@ -1509,7 +1560,8 @@ struct BlockEditorRow: View {
         )
         block.intervals.append(newInterval)
         onChanged()
-        onScrollTo(newInterval.id)
+        // Scroll to the add button so it stays visible after the new item appears above it
+        onScrollTo("addInterval-\(block.id)")
     }
     
     private func addChildBlock() {
@@ -1522,7 +1574,8 @@ struct BlockEditorRow: View {
         )
         block.childBlocks.append(newBlock)
         onChanged()
-        onScrollTo(newBlock.id)
+        // Scroll to the add button so it stays visible after the new item appears above it
+        onScrollTo("addSubBlock-\(block.id)")
     }
     
     private func deleteBlock() {
@@ -1760,6 +1813,7 @@ struct IntervalRowView: View {
                 }
             }
         }
+        .padding(.vertical, 8)
     }
     
     // MARK: - Edit Mode
@@ -1912,6 +1966,7 @@ struct IntervalRowView: View {
                 }
             }
         }
+        .padding(.vertical, 4)
         .opacity(activeDragItemID == interval.id ? 0 : 1)
     }
     
