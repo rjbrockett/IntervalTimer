@@ -526,14 +526,13 @@ struct TemplateEditorView: View {
                                     }
                                 },
                                 onDragStarted: { draggedID in
-                                    // Only run once — startDrag guards on activeDrag == nil
                                     guard activeDrag == nil else { return }
                                     
                                     // Capture item's viewport-relative Y before collapse shifts layout
                                     let anchorY: CGFloat
                                     if let itemY = headerPositions[draggedID] {
                                         let relativeY = (itemY - listGlobalFrame.minY) / listGlobalFrame.height
-                                        anchorY = min(max(relativeY, 0), 1)
+                                        anchorY = min(max(relativeY - 0.015, 0), 1)
                                     } else {
                                         anchorY = 0.5
                                     }
@@ -556,7 +555,7 @@ struct TemplateEditorView: View {
                                     updateAutoScroll(at: location, scrollProxy: scrollProxy)
                                 },
                                 onDragEnded: {
-                                    commitDrag(in: template)
+                                    commitDrag(in: template, scrollProxy: scrollProxy)
                                 },
                                 onScrollTo: { targetID in
                                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -1117,9 +1116,9 @@ struct TemplateEditorView: View {
     }
     
     /// Commit the drag: reorder items, then cleanup
-    private func commitDrag(in template: WorkoutTemplate) {
+    private func commitDrag(in template: WorkoutTemplate, scrollProxy: ScrollViewProxy) {
         guard let drag = activeDrag, let target = dropTarget else {
-            cancelDrag()
+            cancelDrag(scrollProxy: scrollProxy)
             return
         }
         
@@ -1128,7 +1127,7 @@ struct TemplateEditorView: View {
             // Dragging a child (interval or sub-block) within a parent block
             var children = parentBlock.sortedChildren
             guard let currentIndex = children.firstIndex(where: { $0.id == drag.itemID }) else {
-                cancelDrag()
+                cancelDrag(scrollProxy: scrollProxy)
                 return
             }
             
@@ -1161,7 +1160,7 @@ struct TemplateEditorView: View {
         } else {
             // Dragging a top-level block
             guard let ctx = findBlockContext(id: drag.itemID, in: template) else {
-                cancelDrag()
+                cancelDrag(scrollProxy: scrollProxy)
                 return
             }
             
@@ -1171,7 +1170,7 @@ struct TemplateEditorView: View {
             if !isNoOp {
                 var siblings = template.blocks.sorted { $0.sortOrder < $1.sortOrder }
                 guard ctx.indexInSiblings < siblings.count else {
-                    cancelDrag()
+                    cancelDrag(scrollProxy: scrollProxy)
                     return
                 }
                 
@@ -1197,20 +1196,27 @@ struct TemplateEditorView: View {
             }
         }
         
-        cleanupDrag()
+        cleanupDrag(scrollProxy: scrollProxy)
     }
     
     /// Cancel drag without reordering
-    private func cancelDrag() {
+    private func cancelDrag(scrollProxy: ScrollViewProxy) {
         #if os(iOS)
         let generator = UIImpactFeedbackGenerator(style: .light)
         generator.impactOccurred()
         #endif
-        cleanupDrag()
+        cleanupDrag(scrollProxy: scrollProxy)
     }
     
-    /// Clear all drag state
+    /// Clear drag state without scroll anchoring
     private func cleanupDrag() {
+        cleanupDrag(scrollProxy: nil)
+    }
+    
+    /// Clear all drag state, optionally anchoring scroll position
+    private func cleanupDrag(scrollProxy: ScrollViewProxy?) {
+        let draggedID = activeDrag?.itemID
+        
         var transaction = Transaction()
         transaction.animation = nil
         withTransaction(transaction) {
@@ -1221,8 +1227,36 @@ struct TemplateEditorView: View {
             positionStorage.isDragging = false
             stopAutoScroll()
         }
-        withAnimation(.easeInOut(duration: 0.25)) {
-            hiddenBlockIDs.removeAll()
+        
+        // Wait a frame for layout to settle at the new position, then read anchor and expand
+        if let draggedID, let scrollProxy {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                // Read the item's NEW position after reorder layout
+                let anchorY: CGFloat
+                if let itemY = headerPositions[draggedID] {
+                    let relativeY = (itemY - listGlobalFrame.minY) / listGlobalFrame.height
+                    anchorY = min(max(relativeY - 0.015, 0), 1)
+                } else {
+                    anchorY = 0.5
+                }
+                
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    hiddenBlockIDs.removeAll()
+                }
+                
+                // After expand animation, scroll to pin item at its post-drop position
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    var t = Transaction()
+                    t.animation = nil
+                    withTransaction(t) {
+                        scrollProxy.scrollTo(draggedID, anchor: UnitPoint(x: 0.5, y: anchorY))
+                    }
+                }
+            }
+        } else {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                hiddenBlockIDs.removeAll()
+            }
         }
     }
     
