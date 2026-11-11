@@ -512,11 +512,23 @@ struct TemplateEditorView: View {
                                     }
                                 },
                                 onDragStarted: { draggedID in
+                                    // Capture item's viewport-relative Y before collapse shifts layout
+                                    let anchorY: CGFloat
+                                    if let itemY = headerPositions[draggedID] {
+                                        let relativeY = (itemY - listGlobalFrame.minY) / listGlobalFrame.height
+                                        anchorY = min(max(relativeY, 0), 1)
+                                    } else {
+                                        anchorY = 0.5
+                                    }
+                                    
                                     startDrag(itemID: draggedID, in: template)
-                                    // After collapse, scroll to keep dragged item visible
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                                        withAnimation(.easeInOut(duration: 0.2)) {
-                                            scrollProxy.scrollTo(draggedID)
+                                    
+                                    // After collapse, scroll to pin item at its original screen position
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                        var transaction = Transaction()
+                                        transaction.animation = nil
+                                        withTransaction(transaction) {
+                                            scrollProxy.scrollTo(draggedID, anchor: UnitPoint(x: 0.5, y: anchorY))
                                         }
                                     }
                                 },
