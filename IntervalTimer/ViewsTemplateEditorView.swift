@@ -286,6 +286,8 @@ struct TemplateEditorView: View {
     @State private var dropTarget: DropTarget?
     @State private var autoScrollTimer: Timer?
     @State private var listGlobalFrame: CGRect = .zero
+    /// Current pinned headers, updated by scroll geometry change
+    @State private var currentPinnedHeaders: [BlockHeaderInfo] = []
 
     #if os(iOS)
 
@@ -579,6 +581,14 @@ struct TemplateEditorView: View {
                 }
             }
             .scrollDismissesKeyboard(.immediately)
+            .onScrollGeometryChange(for: CGFloat.self) { geo in
+                geo.contentOffset.y
+            } action: { _, _ in
+                let newPinned = computePinnedHeaders()
+                if newPinned != currentPinnedHeaders {
+                    currentPinnedHeaders = newPinned
+                }
+            }
             .onGeometryChange(for: [CGFloat].self) { geo in
                 [geo.safeAreaInsets.top, geo.size.height]
             } action: { values in
@@ -750,7 +760,7 @@ struct TemplateEditorView: View {
     /// Computes which headers should be pinned based on current scroll positions
     @ViewBuilder
     private var stickyHeaderOverlay: some View {
-        let pinned = pinnedHeaders
+        let pinned = currentPinnedHeaders
         if !pinned.isEmpty {
             VStack(spacing: 0) {
                 ForEach(pinned, id: \.id) { info in
@@ -771,7 +781,7 @@ struct TemplateEditorView: View {
                         
                         Spacer()
                     }
-                    .padding(.leading, CGFloat(info.depth) * 4 + 20)
+                    .padding(.leading, CGFloat(info.depth) * 16 + 32)
                     .padding(.vertical, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(.regularMaterial)
@@ -804,8 +814,8 @@ struct TemplateEditorView: View {
         return result
     }
     
-    /// Determines which block headers should be pinned at the top
-    private var pinnedHeaders: [BlockHeaderInfo] {
+    /// Computes which block headers should be pinned at the top
+    private func computePinnedHeaders() -> [BlockHeaderInfo] {
         let pinThreshold = listMetrics.top + stickyOverlayHeight
         var pinned: [BlockHeaderInfo] = []
         
@@ -1306,6 +1316,7 @@ struct BlockEditorRow: View {
     
     var body: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
+            Group {
             // Block settings row (edit mode only) — pinned, not movable
             if isEditing {
                 HStack {
@@ -1421,6 +1432,7 @@ struct BlockEditorRow: View {
                     .padding(.vertical, 4)
                 }
                 .buttonStyle(.borderless)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .id("addInterval-\(block.id)")
                 
                 if depth < maxNestingDepth {
@@ -1436,6 +1448,7 @@ struct BlockEditorRow: View {
                         .padding(.vertical, 4)
                     }
                     .buttonStyle(.borderless)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .id("addSubBlock-\(block.id)")
                 }
             }
@@ -1449,6 +1462,8 @@ struct BlockEditorRow: View {
                 } action: { maxY in
                     onContentBottom(block.id, maxY)
                 }
+            }
+            .padding(.leading, 16)
         } label: {
             // Block title — this is what the drag handle aligns with
             HStack(spacing: 6) {
@@ -1527,7 +1542,7 @@ struct BlockEditorRow: View {
                 onHeaderPosition(block.id, minY)
             }
         }
-        .padding(.leading, CGFloat(depth) * 4)
+        .padding(.leading, 0)
         .opacity(activeDragItemID == block.id ? 0 : 1)
         .onChange(of: allCollapsed) { _, collapsed in
             isExpanded = !collapsed
@@ -1787,11 +1802,9 @@ struct IntervalRowView: View {
     
     private var viewBody: some View {
         HStack {
-            if depth > 0 {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(rowColor.opacity(0.3))
-                    .frame(width: 3)
-            }
+            RoundedRectangle(cornerRadius: 2)
+                .fill(rowColor.opacity(0.3))
+                .frame(width: 3)
             
             Text(interval.name)
                 .lineLimit(1)
@@ -1821,11 +1834,9 @@ struct IntervalRowView: View {
     private var editingBody: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                if depth > 0 {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(rowColor.opacity(0.3))
-                        .frame(width: 3)
-                }
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(rowColor.opacity(0.3))
+                    .frame(width: 3)
                 
                 if editingName {
                     TextField("Name", text: Binding(
