@@ -540,7 +540,7 @@ struct TemplateEditorView: View {
                                     startDrag(itemID: draggedID, in: template)
                                     
                                     // After collapse, scroll to pin item at its original screen position
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                                         var transaction = Transaction()
                                         transaction.animation = nil
                                         withTransaction(transaction) {
