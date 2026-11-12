@@ -1341,10 +1341,48 @@ struct TemplateEditorView: View {
         return nil
     }
     #else
-    private func startDisplayLinkIfNeeded() {}
+    private func startDisplayLinkIfNeeded() {
+        guard autoScrollTimer == nil else { return }
+        let storage = positionStorage
+        guard let scrollView = findNSScrollView() else { return }
+        // Use a fast timer to approximate display link on macOS
+        autoScrollTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { _ in
+            guard storage.isDragging, storage.autoScrollSpeed != 0 else { return }
+            let clipView = scrollView.contentView
+            var point = clipView.bounds.origin
+            // SwiftUI's hosting scroll view is flipped, so positive Y = scroll down
+            point.y += storage.autoScrollSpeed
+            let documentHeight = scrollView.documentView?.frame.height ?? 0
+            let maxY = max(documentHeight - clipView.bounds.height, 0)
+            point.y = min(max(point.y, 0), maxY)
+            clipView.scroll(to: point)
+            scrollView.reflectScrolledClipView(clipView)
+        }
+    }
+    
     private func stopAutoScroll() {
+        positionStorage.autoScrollSpeed = 0
         autoScrollTimer?.invalidate()
         autoScrollTimer = nil
+    }
+    
+    private func findNSScrollView() -> NSScrollView? {
+        guard let window = NSApplication.shared.windows.first else { return nil }
+        return findScrollView(in: window.contentView)
+    }
+    
+    private func findScrollView(in view: NSView?) -> NSScrollView? {
+        guard let view else { return nil }
+        if let sv = view as? NSScrollView {
+            let frame = sv.convert(sv.bounds, to: nil)
+            if abs(frame.width - listGlobalFrame.width) < 5 && frame.minY <= listGlobalFrame.minY && frame.maxY >= listGlobalFrame.maxY {
+                return sv
+            }
+        }
+        for sub in view.subviews {
+            if let found = findScrollView(in: sub) { return found }
+        }
+        return nil
     }
     #endif
     

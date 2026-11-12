@@ -222,6 +222,10 @@ struct MyRoutinesView: View {
             if !hasSeeded && templates.isEmpty {
                 seedSampleData()
                 UserDefaults.standard.set(true, forKey: "hasSeededSampleData")
+            }
+            // Seed test routine if it doesn't exist yet
+            if !templates.contains(where: { $0.name == "Drag Test Routine" }) {
+                seedDragTestRoutine()
             } else if !templates.isEmpty {
                 let allZero = templates.allSatisfy { $0.sortOrder == 0 } && templates.count > 1
                 if allZero {
@@ -368,6 +372,56 @@ struct MyRoutinesView: View {
         modelContext.insert(template1)
         modelContext.insert(template2)
         modelContext.insert(template3)
+        seedDragTestRoutine()
+    }
+    
+    private func seedDragTestRoutine() {
+        let subBlock1 = IntervalBlock(
+            name: "Sub-Block A",
+            repeatCount: 2,
+            sortOrder: 0,
+            intervals: [
+                IntervalItem(name: "Move A1", duration: 30, sortOrder: 0),
+                IntervalItem(name: "Move A2", duration: 30, sortOrder: 1)
+            ]
+        )
+        let subBlock2 = IntervalBlock(
+            name: "Sub-Block B",
+            repeatCount: 2,
+            sortOrder: 1,
+            intervals: [
+                IntervalItem(name: "Move B1", duration: 45, sortOrder: 0),
+                IntervalItem(name: "Move B2", duration: 45, sortOrder: 1)
+            ]
+        )
+        let subBlock3 = IntervalBlock(
+            name: "Sub-Block C",
+            repeatCount: 1,
+            sortOrder: 2,
+            intervals: [
+                IntervalItem(name: "Move C1", duration: 20, sortOrder: 0)
+            ]
+        )
+        let testBlock = IntervalBlock(
+            name: "Big Block",
+            repeatCount: 1,
+            sortOrder: 0,
+            intervals: [
+                IntervalItem(name: "Interval 1", duration: 60, sortOrder: 0),
+                IntervalItem(name: "Interval 2", duration: 45, sortOrder: 1),
+                IntervalItem(name: "Interval 3", duration: 30, sortOrder: 2),
+                IntervalItem(name: "Interval 4", duration: 90, sortOrder: 3),
+                IntervalItem(name: "Interval 5", duration: 20, sortOrder: 4),
+                IntervalItem(name: "Interval 6", duration: 60, sortOrder: 5)
+            ],
+            childBlocks: [subBlock1, subBlock2, subBlock3]
+        )
+        let template = WorkoutTemplate(
+            name: "Drag Test Routine",
+            sortOrder: 3,
+            blocks: [testBlock]
+        )
+        modelContext.insert(template)
     }
 }
 
