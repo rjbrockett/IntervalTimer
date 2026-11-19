@@ -607,6 +607,10 @@ struct TemplateEditorView: View {
                         }
                     }
                 }
+                
+                // Stable scroll anchor outside LazyVStack content
+                Color.clear.frame(height: 1)
+                    .id("scrollBottomAnchor")
             }
             .scrollDismissesKeyboard(.immediately)
             .onScrollGeometryChange(for: CGFloat.self) { geo in
@@ -615,6 +619,21 @@ struct TemplateEditorView: View {
                 let newPinned = computePinnedHeaders()
                 if newPinned != currentPinnedHeaders {
                     currentPinnedHeaders = newPinned
+                }
+            }
+            .onChange(of: allCollapsed) { _, collapsed in
+                if collapsed {
+                    // Immediately clear sticky headers
+                    currentPinnedHeaders = []
+                    // After collapse animation settles, clear stale geometry
+                    // and scroll user back into content if stranded
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        positionStorage.headerPositions.removeAll()
+                        positionStorage.contentBottoms.removeAll()
+                        withAnimation {
+                            scrollProxy.scrollTo("scrollBottomAnchor", anchor: .bottom)
+                        }
+                    }
                 }
             }
             .onGeometryChange(for: [CGFloat].self) { geo in
@@ -731,7 +750,9 @@ struct TemplateEditorView: View {
             Text("Are you sure you want to delete this routine? This cannot be undone.")
         }
         .sheet(isPresented: $showingShareSheet) {
-            ShareRoutineView(template: template)
+            // Use self.template (parent context) — not the editorContent
+            // parameter which is the child context's editableTemplate
+            ShareRoutineView(template: self.template)
         }
         .alert(
             "Make a Copy",

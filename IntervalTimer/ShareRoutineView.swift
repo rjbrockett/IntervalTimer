@@ -10,11 +10,16 @@ struct ShareRoutineView: View {
     
     @State private var creatorName: String = ""
     @State private var isPublishing = false
-    @State private var shareURL: URL?
     @State private var errorMessage: String?
     @State private var showingUnpublishConfirm = false
     @State private var isUnpublishing = false
     @State private var showCopiedFeedback = false
+    
+    /// Derived from template state so it's always current
+    private var shareURL: URL? {
+        guard let recordName = template.publishedRecordName else { return nil }
+        return CloudKitSharingService.shareURL(for: recordName)
+    }
     
     var body: some View {
         NavigationStack {
@@ -45,9 +50,6 @@ struct ShareRoutineView: View {
             }
         }
         .onAppear {
-            if template.isPublished == true, let recordName = template.publishedRecordName {
-                shareURL = CloudKitSharingService.shareURL(for: recordName)
-            }
             #if os(iOS)
             creatorName = UIDevice.current.name
             #else
@@ -177,10 +179,10 @@ struct ShareRoutineView: View {
         
         let service = CloudKitSharingService()
         do {
-            let recordName = try await service.publishRoutine(template, creatorName: creatorName)
-            shareURL = CloudKitSharingService.shareURL(for: recordName)
+            _ = try await service.publishRoutine(template, creatorName: creatorName)
             try? modelContext.save()
         } catch {
+            print("📤 publish() failed: \(error)")
             errorMessage = error.localizedDescription
         }
         
@@ -194,7 +196,6 @@ struct ShareRoutineView: View {
         let service = CloudKitSharingService()
         do {
             try await service.unpublishRoutine(template)
-            shareURL = nil
             try? modelContext.save()
         } catch {
             errorMessage = error.localizedDescription
