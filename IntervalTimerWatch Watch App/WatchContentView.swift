@@ -129,7 +129,7 @@ struct WatchContentView: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         } else {
-                            Text("\(template.blocks.count) block\(template.blocks.count == 1 ? "" : "s")")
+                            Text("\(template.blocks?.count ?? 0) block\(template.blocks?.count == 1 ? "" : "s")")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }

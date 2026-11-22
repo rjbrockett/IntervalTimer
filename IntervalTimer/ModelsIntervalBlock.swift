@@ -23,45 +23,50 @@ enum BlockChild: Identifiable {
 
 @Model
 final class IntervalBlock {
-    var id: UUID
+    // CloudKit requires every attribute to be optional or have a default value,
+    // and every relationship to be optional with an inverse.
+    var id: UUID = UUID()
     var name: String?
-    var repeatCount: Int
-    var sortOrder: Int
+    var repeatCount: Int = 1
+    var sortOrder: Int = 0
     
-    @Relationship(deleteRule: .cascade) 
-    var intervals: [IntervalItem]
+    @Relationship(deleteRule: .cascade, inverse: \IntervalItem.block)
+    var intervals: [IntervalItem]? = []
     
     @Relationship(deleteRule: .cascade, inverse: \IntervalBlock.parentBlock)
-    var childBlocks: [IntervalBlock]
+    var childBlocks: [IntervalBlock]? = []
     
     var parentBlock: IntervalBlock?
     
+    /// Inverse of WorkoutTemplate.blocks (nil for nested child blocks)
+    var template: WorkoutTemplate?
+    
     /// True if this block contains sub-blocks rather than intervals
     var isGroup: Bool {
-        !childBlocks.isEmpty
+        !(childBlocks ?? []).isEmpty
     }
     
     /// Sorted child blocks by sortOrder
     var sortedChildBlocks: [IntervalBlock] {
-        childBlocks.sorted { $0.sortOrder < $1.sortOrder }
+        (childBlocks ?? []).sorted { $0.sortOrder < $1.sortOrder }
     }
     
     /// Sorted intervals by sortOrder
     var sortedIntervals: [IntervalItem] {
-        intervals.sorted { $0.sortOrder < $1.sortOrder }
+        (intervals ?? []).sorted { $0.sortOrder < $1.sortOrder }
     }
     
     /// All children (intervals + child blocks) sorted together by sortOrder
     var sortedChildren: [BlockChild] {
-        let intervalItems: [BlockChild] = intervals.map { .interval($0) }
-        let blockItems: [BlockChild] = childBlocks.map { .childBlock($0) }
+        let intervalItems: [BlockChild] = (intervals ?? []).map { .interval($0) }
+        let blockItems: [BlockChild] = (childBlocks ?? []).map { .childBlock($0) }
         return (intervalItems + blockItems).sorted { $0.sortOrder < $1.sortOrder }
     }
     
     /// Next available sortOrder across both intervals and child blocks
     var nextChildSortOrder: Int {
-        let maxInterval = intervals.map(\.sortOrder).max() ?? -1
-        let maxBlock = childBlocks.map(\.sortOrder).max() ?? -1
+        let maxInterval = (intervals ?? []).map(\.sortOrder).max() ?? -1
+        let maxBlock = (childBlocks ?? []).map(\.sortOrder).max() ?? -1
         return max(maxInterval, maxBlock) + 1
     }
     
@@ -83,8 +88,8 @@ final class IntervalBlock {
     
     /// Create a deep copy with new UUIDs for the block and all children
     func duplicate() -> IntervalBlock {
-        let newIntervals = intervals.map { $0.duplicate() }
-        let newChildBlocks = childBlocks.map { $0.duplicate() }
+        let newIntervals = (intervals ?? []).map { $0.duplicate() }
+        let newChildBlocks = (childBlocks ?? []).map { $0.duplicate() }
         return IntervalBlock(
             id: UUID(),
             name: name,

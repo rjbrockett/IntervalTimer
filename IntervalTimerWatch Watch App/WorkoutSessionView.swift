@@ -8,6 +8,8 @@ struct WorkoutSessionView: View {
     @State private var healthKit = HealthKitManager()
     @State private var showingPauseOverlay = false
     @State private var showingAuthError = false
+    /// Total distance at the moment the current step began (meters)
+    @State private var stepStartDistance: Double = 0
 
     init(template: WorkoutTemplate) {
         self.template = template
@@ -49,6 +51,9 @@ struct WorkoutSessionView: View {
             if newState == .ended {
                 endWorkout()
             }
+        }
+        .onChange(of: player.currentStepIndex) {
+            stepStartDistance = healthKit.distanceWalkingRunning
         }
         .alert("HealthKit Not Authorized", isPresented: $showingAuthError) {
             Button("OK") {
@@ -234,16 +239,17 @@ struct WorkoutSessionView: View {
 
     private var controlButtons: some View {
         HStack(spacing: 12) {
-            // Previous
-            Button {
+            // Previous (long press to avoid accidental skips)
+            HoldToActivateButton(
+                systemImage: "backward.fill",
+                label: "Previous",
+                font: .system(size: 14),
+                width: 36, height: 36
+            ) {
                 player.skipToPrevious()
-            } label: {
-                Image(systemName: "backward.fill")
-                    .font(.system(size: 14))
-                    .frame(width: 36, height: 36)
+                // Restarting or going back starts a fresh distance count
+                stepStartDistance = healthKit.distanceWalkingRunning
             }
-            .buttonStyle(.bordered)
-            .tint(.secondary)
 
             // Play / Pause
             Button {
@@ -268,16 +274,15 @@ struct WorkoutSessionView: View {
             .buttonStyle(.borderedProminent)
             .tint(player.state == .running ? .orange : .green)
 
-            // Next
-            Button {
+            // Next (long press to avoid accidental skips)
+            HoldToActivateButton(
+                systemImage: "forward.fill",
+                label: "Next",
+                font: .system(size: 14),
+                width: 36, height: 36
+            ) {
                 player.skipToNext()
-            } label: {
-                Image(systemName: "forward.fill")
-                    .font(.system(size: 14))
-                    .frame(width: 36, height: 36)
             }
-            .buttonStyle(.bordered)
-            .tint(.secondary)
         }
     }
 
@@ -302,7 +307,8 @@ struct WorkoutSessionView: View {
 
     @ViewBuilder
     private var distanceView: some View {
-        let miles = healthKit.distanceWalkingRunning / 1609.34
+        // Distance covered during the current interval only
+        let miles = max(0, healthKit.distanceWalkingRunning - stepStartDistance) / 1609.34
         VStack(spacing: 2) {
             Image(systemName: "figure.run")
                 .font(.caption)
@@ -424,6 +430,48 @@ struct WorkoutSessionView: View {
         } else {
             return String(format: "%d", secs)
         }
+    }
+}
+
+// MARK: - Hold To Activate Button
+
+/// A control that only fires after a long press, so a mistimed tap
+/// (e.g. while reaching for pause) doesn't skip an interval.
+private struct HoldToActivateButton: View {
+    let systemImage: String
+    let label: String
+    let font: Font
+    let width: CGFloat
+    let height: CGFloat
+    let action: () -> Void
+
+    @State private var isPressing = false
+    @State private var activationCount = 0
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(font)
+            .foregroundStyle(.secondary)
+            .frame(width: width, height: height)
+            .background(
+                Capsule()
+                    .fill(Color.secondary.opacity(isPressing ? 0.4 : 0.2))
+            )
+            .scaleEffect(isPressing ? 0.92 : 1)
+            .animation(.easeOut(duration: 0.15), value: isPressing)
+            .contentShape(Capsule())
+            .onLongPressGesture(minimumDuration: 0.5) {
+                activationCount += 1
+                action()
+            } onPressingChanged: { pressing in
+                isPressing = pressing
+            }
+            .sensoryFeedback(.impact, trigger: activationCount)
+            .accessibilityElement()
+            .accessibilityLabel(label)
+            .accessibilityHint("Press and hold")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { action() }
     }
 }
 

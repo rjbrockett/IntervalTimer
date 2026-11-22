@@ -6,11 +6,7 @@ struct IntervalTimer_Watch_App: App {
     let modelContainer: ModelContainer
 
     init() {
-        let schema = Schema([
-            WorkoutTemplate.self,
-            IntervalBlock.self,
-            IntervalItem.self
-        ])
+        let schema = Schema(versionedSchema: SchemaV2.self)
         
         #if targetEnvironment(simulator)
         // Simulator: local-only store (CloudKit entitlements unavailable)
@@ -29,6 +25,7 @@ struct IntervalTimer_Watch_App: App {
         do {
             modelContainer = try ModelContainer(
                 for: schema,
+                migrationPlan: IntervalTimerMigrationPlan.self,
                 configurations: [config]
             )
         } catch {

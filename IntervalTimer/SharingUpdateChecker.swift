@@ -39,7 +39,7 @@ struct RoutineUpdateChecker {
         let (payload, _) = try await service.fetchRoutine(recordName: recordName)
         
         // Delete existing blocks (cascade will remove intervals and child blocks)
-        for block in template.blocks {
+        for block in template.blocks ?? [] {
             context.delete(block)
         }
         

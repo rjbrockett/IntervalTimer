@@ -3,12 +3,17 @@ import SwiftData
 
 @Model
 final class IntervalItem {
-    var id: UUID
-    var name: String
-    var duration: TimeInterval  // seconds
-    var sortOrder: Int
-    var trackDistance: Bool
+    // CloudKit requires every attribute to be optional or have a default value,
+    // and every relationship to be optional with an inverse.
+    var id: UUID = UUID()
+    var name: String = ""
+    var duration: TimeInterval = 0  // seconds
+    var sortOrder: Int = 0
+    var trackDistance: Bool = false
     var distanceGoal: Double?  // in meters, nil means no goal
+    
+    /// Inverse of IntervalBlock.intervals
+    var block: IntervalBlock?
     
     init(id: UUID = UUID(), name: String, duration: TimeInterval, sortOrder: Int, trackDistance: Bool = false, distanceGoal: Double? = nil) {
         self.id = id

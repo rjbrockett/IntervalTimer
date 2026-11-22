@@ -7,7 +7,9 @@
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>IntervalTimer saves workout sessions to your Health app so you can review your training history.</string>
 	<key>UIBackgroundModes</key>
-	<array/>
+	<array>
+		<string>remote-notification</string>
+	</array>
 	<key>WKBackgroundModes</key>
 	<array>
 		<string>workout-processing</string>

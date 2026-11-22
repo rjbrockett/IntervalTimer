@@ -7,16 +7,19 @@ struct WorkoutSessionView: View {
     @State private var player: WorkoutPlayer
     @State private var showingEndConfirmation = false
     @State private var locationManager = LocationManager()
+    /// Total distance at the moment the current step began (meters)
+    @State private var stepStartDistance: Double = 0
     
     /// Whether any interval in this template tracks distance
     private var anyIntervalTracksDistance: Bool {
-        template.blocks.contains { block in
-            block.intervals.contains { $0.trackDistance }
+        (template.blocks ?? []).contains { block in
+            (block.intervals ?? []).contains { $0.trackDistance }
         }
     }
     
+    /// Distance covered during the current interval only
     private var distanceMiles: Double {
-        locationManager.totalDistanceMiles
+        max(0, locationManager.totalDistance - stepStartDistance) / 1609.34
     }
     
     init(template: WorkoutTemplate) {
@@ -74,6 +77,9 @@ struct WorkoutSessionView: View {
                 locationManager.stopTracking()
                 dismiss()
             }
+        }
+        .onChange(of: player.currentStepIndex) {
+            stepStartDistance = locationManager.totalDistance
         }
         .confirmationDialog("End Workout?", isPresented: $showingEndConfirmation) {
             Button("End Workout", role: .destructive) {
@@ -201,16 +207,17 @@ struct WorkoutSessionView: View {
     
     private var controlsSection: some View {
         HStack(spacing: 32) {
-            // Previous / Restart
-            Button {
+            // Previous / Restart (long press to avoid accidental skips)
+            HoldToActivateButton(
+                systemImage: "backward.fill",
+                label: "Previous",
+                font: .title2,
+                width: 56, height: 56
+            ) {
                 player.skipToPrevious()
-            } label: {
-                Image(systemName: "backward.fill")
-                    .font(.title2)
-                    .frame(width: 56, height: 56)
+                // Restarting or going back starts a fresh distance count
+                stepStartDistance = locationManager.totalDistance
             }
-            .buttonStyle(.bordered)
-            .tint(.secondary)
             
             // Play / Pause
             Button {
@@ -227,16 +234,15 @@ struct WorkoutSessionView: View {
             .buttonStyle(.borderedProminent)
             .tint(player.state == .running ? .orange : .green)
             
-            // Next
-            Button {
+            // Next (long press to avoid accidental skips)
+            HoldToActivateButton(
+                systemImage: "forward.fill",
+                label: "Next",
+                font: .title2,
+                width: 56, height: 56
+            ) {
                 player.skipToNext()
-            } label: {
-                Image(systemName: "forward.fill")
-                    .font(.title2)
-                    .frame(width: 56, height: 56)
             }
-            .buttonStyle(.bordered)
-            .tint(.secondary)
         }
     }
     
@@ -289,6 +295,48 @@ struct WorkoutSessionView: View {
         } else {
             return String(format: "%d", secs)
         }
+    }
+}
+
+// MARK: - Hold To Activate Button
+
+/// A control that only fires after a long press, so a mistimed tap
+/// (e.g. while reaching for pause) doesn't skip an interval.
+private struct HoldToActivateButton: View {
+    let systemImage: String
+    let label: String
+    let font: Font
+    let width: CGFloat
+    let height: CGFloat
+    let action: () -> Void
+    
+    @State private var isPressing = false
+    @State private var activationCount = 0
+    
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(font)
+            .foregroundStyle(.secondary)
+            .frame(width: width, height: height)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.secondary.opacity(isPressing ? 0.4 : 0.2))
+            )
+            .scaleEffect(isPressing ? 0.92 : 1)
+            .animation(.easeOut(duration: 0.15), value: isPressing)
+            .contentShape(RoundedRectangle(cornerRadius: 12))
+            .onLongPressGesture(minimumDuration: 0.5) {
+                activationCount += 1
+                action()
+            } onPressingChanged: { pressing in
+                isPressing = pressing
+            }
+            .sensoryFeedback(.impact, trigger: activationCount)
+            .accessibilityElement()
+            .accessibilityLabel(label)
+            .accessibilityHint("Press and hold")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { action() }
     }
 }
 

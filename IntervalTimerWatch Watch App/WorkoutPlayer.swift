@@ -55,7 +55,7 @@ final class WorkoutPlayer {
     /// Flatten a WorkoutTemplate into a linear list of PlaybackSteps
     static func flatten(template: WorkoutTemplate) -> [PlaybackStep] {
         var steps: [PlaybackStep] = []
-        let sortedBlocks = template.blocks.sorted { $0.sortOrder < $1.sortOrder }
+        let sortedBlocks = template.sortedBlocks
         for block in sortedBlocks {
             steps.append(contentsOf: flattenBlock(block))
         }

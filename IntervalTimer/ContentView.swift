@@ -143,7 +143,7 @@ struct MyRoutinesView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(template.name)
                             .font(.headline)
-                        Text("\(template.blocks.count) block\(template.blocks.count == 1 ? "" : "s")")
+                        Text("\(template.blocks?.count ?? 0) block\(template.blocks?.count == 1 ? "" : "s")")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -276,7 +276,7 @@ struct MyRoutinesView: View {
     }
     
     private func duplicateTemplate(_ original: WorkoutTemplate) {
-        let newBlocks = original.blocks.map { $0.duplicate() }
+        let newBlocks = original.sortedBlocks.map { $0.duplicate() }
         let copy = WorkoutTemplate(
             name: "\(original.name) Copy",
             blocks: newBlocks

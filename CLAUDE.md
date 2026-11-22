@@ -40,7 +40,9 @@ IntervalItem
 Adding new fields to models requires updating BOTH iOS and watch copies.
 
 ### Data Migration (SwiftData VersionedSchema)
-- Both targets have `ModelsMigration.swift` with `SchemaV1` (current schema) and `IntervalTimerMigrationPlan`
+- Both targets have `ModelsMigration.swift` with `SchemaV1` (frozen snapshot of the original non-CloudKit schema), `SchemaV2` (current live models), and `IntervalTimerMigrationPlan`
+- V1→V2 is a custom stage: V2 added attribute defaults, optional relationships, and inverses (`IntervalBlock.template`, `IntervalItem.block`) for CloudKit; the stage re-links blocks/intervals by ID since inverse changes alter relationship storage
+- CloudKit model rules: every attribute needs a default or must be optional; every relationship must be optional with an inverse; no `.unique` attributes. To-many relationships are `[T]?` — read with `?? []`
 - ModelContainer is initialized with `migrationPlan: IntervalTimerMigrationPlan.self`
 - When adding/removing/renaming model fields, create a new `SchemaV2` with model snapshots of the new schema, add a migration stage to `IntervalTimerMigrationPlan.stages`, and update both iOS and watch copies
 - Lightweight migrations (adding optional fields, adding fields with defaults) use `.lightweight(fromVersion:toVersion:)`

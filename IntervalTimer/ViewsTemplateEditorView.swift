@@ -575,12 +575,12 @@ struct TemplateEditorView: View {
                         sectionCard {
                             Button(action: {
                                 let newBlock = IntervalBlock(
-                                    name: "Block \(template.blocks.count + 1)",
+                                    name: "Block \((template.blocks ?? []).count + 1)",
                                     repeatCount: 1,
-                                    sortOrder: template.blocks.count,
+                                    sortOrder: (template.blocks ?? []).count,
                                     intervals: []
                                 )
-                                template.blocks.append(newBlock)
+                                template.blocks?.append(newBlock)
                                 markChanged()
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                                     withAnimation {
@@ -725,7 +725,7 @@ struct TemplateEditorView: View {
                     } label: {
                         Label("Start Workout", systemImage: "play.fill")
                     }
-                    .disabled(template.blocks.isEmpty)
+                    .disabled((template.blocks ?? []).isEmpty)
                 }
             }
         }
@@ -860,7 +860,7 @@ struct TemplateEditorView: View {
         var result: [(IntervalBlock, Int)] = []
         for block in blocks.sorted(by: { $0.sortOrder < $1.sortOrder }) {
             result.append((block, depth))
-            result.append(contentsOf: allBlocks(from: block.childBlocks, depth: depth + 1))
+            result.append(contentsOf: allBlocks(from: block.childBlocks ?? [], depth: depth + 1))
         }
         return result
     }
@@ -872,7 +872,7 @@ struct TemplateEditorView: View {
         
         let activeTemplate = editableTemplate ?? template
         
-        for (block, depth) in allBlocks(from: activeTemplate.blocks) {
+        for (block, depth) in allBlocks(from: activeTemplate.blocks ?? []) {
             // Skip blocks that are collapsed during drag
             guard !hiddenBlockIDs.contains(block.id) else { continue }
             guard let minY = headerPositions[block.id] else { continue }
@@ -906,7 +906,7 @@ struct TemplateEditorView: View {
     /// Recursively find a block and its context in the template hierarchy
     private func findBlockContext(id: UUID, in template: WorkoutTemplate) -> BlockContext? {
         // Check top-level blocks
-        let topBlocks = template.blocks.sorted { $0.sortOrder < $1.sortOrder }
+        let topBlocks = template.sortedBlocks
         if let index = topBlocks.firstIndex(where: { $0.id == id }) {
             return BlockContext(
                 block: topBlocks[index],
@@ -922,7 +922,7 @@ struct TemplateEditorView: View {
     
     private func findBlockContextRecursive(id: UUID, blocks: [IntervalBlock], depth: Int) -> BlockContext? {
         for parent in blocks {
-            let children = parent.childBlocks.sorted { $0.sortOrder < $1.sortOrder }
+            let children = parent.sortedChildBlocks
             if let index = children.firstIndex(where: { $0.id == id }) {
                 return BlockContext(
                     block: children[index],
@@ -950,8 +950,8 @@ struct TemplateEditorView: View {
         }
         
         // Check if it's an interval — find its parent block
-        for (block, depth) in allBlocks(from: template.blocks) {
-            if let interval = block.intervals.first(where: { $0.id == itemID }) {
+        for (block, depth) in allBlocks(from: template.blocks ?? []) {
+            if let interval = (block.intervals ?? []).first(where: { $0.id == itemID }) {
                 startChildDrag(
                     childID: interval.id,
                     childName: interval.name,
@@ -1038,7 +1038,7 @@ struct TemplateEditorView: View {
         // Collapse child sub-blocks within the parent (not the parent itself)
         // No animation to prevent the dragged item from visually shifting position
         var idsToHide = Set<UUID>()
-        for child in parentBlock.childBlocks {
+        for child in parentBlock.childBlocks ?? [] {
             idsToHide.insert(child.id)
             collectAllDescendantIDs(of: child, into: &idsToHide)
         }
@@ -1047,7 +1047,7 @@ struct TemplateEditorView: View {
     
     /// Find a block by ID anywhere in the template
     private func findBlock(id: UUID, in template: WorkoutTemplate) -> IntervalBlock? {
-        for block in template.blocks {
+        for block in template.blocks ?? [] {
             if block.id == id { return block }
             if let found = findBlockRecursive(id: id, in: block) { return found }
         }
@@ -1055,7 +1055,7 @@ struct TemplateEditorView: View {
     }
     
     private func findBlockRecursive(id: UUID, in parent: IntervalBlock) -> IntervalBlock? {
-        for child in parent.childBlocks {
+        for child in parent.childBlocks ?? [] {
             if child.id == id { return child }
             if let found = findBlockRecursive(id: id, in: child) { return found }
         }
@@ -1064,7 +1064,7 @@ struct TemplateEditorView: View {
     
     /// Collect all descendant block IDs (children, grandchildren, etc.)
     private func collectAllDescendantIDs(of block: IntervalBlock, into set: inout Set<UUID>) {
-        for child in block.childBlocks {
+        for child in block.childBlocks ?? [] {
             set.insert(child.id)
             collectAllDescendantIDs(of: child, into: &set)
         }
@@ -1075,13 +1075,13 @@ struct TemplateEditorView: View {
         if let pid = drag.parentBlockID,
            let parent = findBlock(id: pid, in: template) {
             if drag.kind == .block && drag.parentBlockID == nil {
-                return template.blocks.sorted { $0.sortOrder < $1.sortOrder }.map(\.id)
+                return template.sortedBlocks.map(\.id)
             }
             // Children within a parent block (intervals + sub-blocks)
             return parent.sortedChildren.map(\.id)
         } else {
             // Top-level blocks
-            return template.blocks.sorted { $0.sortOrder < $1.sortOrder }.map(\.id)
+            return template.sortedBlocks.map(\.id)
         }
     }
     
@@ -1189,7 +1189,7 @@ struct TemplateEditorView: View {
                 target.insertionIndex == ctx.indexInSiblings + 1
             
             if !isNoOp {
-                var siblings = template.blocks.sorted { $0.sortOrder < $1.sortOrder }
+                var siblings = template.sortedBlocks
                 guard ctx.indexInSiblings < siblings.count else {
                     cancelDrag(scrollProxy: scrollProxy)
                     return
@@ -1284,7 +1284,7 @@ struct TemplateEditorView: View {
     /// Builds an ordered list of all block IDs in template order (depth-first)
     private func orderedBlockIDs(in template: WorkoutTemplate) -> [UUID] {
         var ids: [UUID] = []
-        for (block, _) in allBlocks(from: template.blocks) {
+        for (block, _) in allBlocks(from: template.blocks ?? []) {
             ids.append(block.id)
         }
         return ids
@@ -1425,7 +1425,7 @@ struct TemplateEditorView: View {
     }
     
     private func makeCopy(of template: WorkoutTemplate) {
-        let newBlocks = template.blocks.map { $0.duplicate() }
+        let newBlocks = (template.blocks ?? []).map { $0.duplicate() }
         let copy = WorkoutTemplate(
             name: "\(template.name) Copy",
             blocks: newBlocks,
@@ -1735,11 +1735,11 @@ struct BlockEditorRow: View {
     
     private func addInterval() {
         let newInterval = IntervalItem(
-            name: "Interval \(block.intervals.count + 1)",
+            name: "Interval \((block.intervals ?? []).count + 1)",
             duration: 60,
             sortOrder: block.nextChildSortOrder
         )
-        block.intervals.append(newInterval)
+        block.intervals?.append(newInterval)
         onChanged()
         // Scroll to the add button so it stays visible after the new item appears above it
         onScrollTo("addInterval-\(block.id)")
@@ -1747,13 +1747,13 @@ struct BlockEditorRow: View {
     
     private func addChildBlock() {
         let newBlock = IntervalBlock(
-            name: "Sub-Block \(block.childBlocks.count + 1)",
+            name: "Sub-Block \((block.childBlocks ?? []).count + 1)",
             repeatCount: 1,
             sortOrder: block.nextChildSortOrder,
             intervals: [],
             parentBlock: block
         )
-        block.childBlocks.append(newBlock)
+        block.childBlocks?.append(newBlock)
         onChanged()
         // Scroll to the add button so it stays visible after the new item appears above it
         onScrollTo("addSubBlock-\(block.id)")
@@ -1761,9 +1761,9 @@ struct BlockEditorRow: View {
     
     private func deleteBlock() {
         if let parent = block.parentBlock {
-            parent.childBlocks.removeAll { $0.id == block.id }
+            parent.childBlocks?.removeAll { $0.id == block.id }
         } else {
-            template.blocks.removeAll { $0.id == block.id }
+            template.blocks?.removeAll { $0.id == block.id }
         }
         modelContext.delete(block)
         onChanged()
@@ -1774,15 +1774,15 @@ struct BlockEditorRow: View {
         duplicatedBlock.sortOrder = block.sortOrder + 1
         
         if let parent = block.parentBlock {
-            for existing in parent.childBlocks where existing.sortOrder > block.sortOrder {
+            for existing in parent.childBlocks ?? [] where existing.sortOrder > block.sortOrder {
                 existing.sortOrder += 1
             }
-            parent.childBlocks.append(duplicatedBlock)
+            parent.childBlocks?.append(duplicatedBlock)
         } else {
-            for existing in template.blocks where existing.sortOrder > block.sortOrder {
+            for existing in template.blocks ?? [] where existing.sortOrder > block.sortOrder {
                 existing.sortOrder += 1
             }
-            template.blocks.append(duplicatedBlock)
+            template.blocks?.append(duplicatedBlock)
         }
         onChanged()
     }
@@ -2151,16 +2151,16 @@ struct IntervalRowView: View {
         let duplicated = interval.duplicate()
         duplicated.sortOrder = interval.sortOrder + 1
         
-        for existingInterval in block.intervals where existingInterval.sortOrder > interval.sortOrder {
+        for existingInterval in block.intervals ?? [] where existingInterval.sortOrder > interval.sortOrder {
             existingInterval.sortOrder += 1
         }
         
-        block.intervals.append(duplicated)
+        block.intervals?.append(duplicated)
         onChanged()
     }
     
     private func deleteInterval() {
-        block.intervals.removeAll { $0.id == interval.id }
+        block.intervals?.removeAll { $0.id == interval.id }
         modelContext.delete(interval)
         onChanged()
     }

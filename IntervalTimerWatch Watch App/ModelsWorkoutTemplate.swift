@@ -3,19 +3,21 @@ import SwiftData
 
 @Model
 final class WorkoutTemplate {
-    var id: UUID
-    var name: String
-    var sortOrder: Int
-    var showHeartRateZones: Bool
+    // CloudKit requires every attribute to be optional or have a default value,
+    // and every relationship to be optional with an inverse.
+    var id: UUID = UUID()
+    var name: String = ""
+    var sortOrder: Int = 0
+    var showHeartRateZones: Bool = false
     var createdAt: Date?
     var updatedAt: Date?
-    @Relationship(deleteRule: .cascade) 
-    var blocks: [IntervalBlock]
-    
+    @Relationship(deleteRule: .cascade, inverse: \IntervalBlock.template)
+    var blocks: [IntervalBlock]? = []
+
     // MARK: - Sharing fields
     // Bool fields are optional because CloudKit requires non-relationship properties
     // to be optional or have static schema-level defaults. Treat nil as false.
-    
+
     /// True if this template was downloaded from another user (read-only, appears in Downloaded tab)
     var isDownloaded: Bool?
     /// CKRecord.ID.recordName of the public-database record this was downloaded from
@@ -32,12 +34,12 @@ final class WorkoutTemplate {
     var creatorName: String?
     /// True when a newer version is available from the source
     var hasAvailableUpdate: Bool?
-    
-    init(id: UUID = UUID(), 
+
+    init(id: UUID = UUID(),
          name: String,
          sortOrder: Int = 0,
          showHeartRateZones: Bool = false,
-         createdAt: Date? = Date(), 
+         createdAt: Date? = Date(),
          updatedAt: Date? = Date(),
          blocks: [IntervalBlock] = [],
          isDownloaded: Bool? = false,
@@ -64,9 +66,9 @@ final class WorkoutTemplate {
         self.creatorName = creatorName
         self.hasAvailableUpdate = hasAvailableUpdate
     }
-    
+
     /// Computed property for sorted blocks
     var sortedBlocks: [IntervalBlock] {
-        blocks.sorted { $0.sortOrder < $1.sortOrder }
+        (blocks ?? []).sorted { $0.sortOrder < $1.sortOrder }
     }
 }

@@ -7,11 +7,7 @@ struct IntervalTimerApp: App {
     @State private var pendingImportRecordName: String?
 
     init() {
-        let schema = Schema([
-            WorkoutTemplate.self,
-            IntervalBlock.self,
-            IntervalItem.self
-        ])
+        let schema = Schema(versionedSchema: SchemaV2.self)
         
         // Try CloudKit first, fall back to local-only if it fails
         // (e.g., simulator without iCloud sign-in, schema mismatch)
@@ -32,7 +28,11 @@ struct IntervalTimerApp: App {
         )
         
         do {
-            return try ModelContainer(for: schema, configurations: [configuration])
+            return try ModelContainer(
+                for: schema,
+                migrationPlan: IntervalTimerMigrationPlan.self,
+                configurations: [configuration]
+            )
         } catch {
             return nil
         }
