@@ -43,4 +43,6 @@ struct SharedIntervalPayload: Codable {
     let sortOrder: Int
     let trackDistance: Bool
     let distanceGoal: Double?
+    /// Optional so payloads published before this field existed still decode
+    let isRest: Bool?
 }

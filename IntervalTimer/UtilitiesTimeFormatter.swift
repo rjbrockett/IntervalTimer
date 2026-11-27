@@ -41,6 +41,18 @@ enum TimeFormatter {
         }
     }
     
+    /// Format as a clock, always with minutes (e.g., 45 → "0:45", 540 → "9:00", 3723 → "1:02:03")
+    static func formatClock(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds.rounded())
+        let hours = total / 3600
+        let minutes = total / 60 % 60
+        let secs = total % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, secs)
+        }
+        return String(format: "%d:%02d", minutes, secs)
+    }
+    
     /// Format remaining time, showing just seconds when under 60s
     static func formatRemaining(_ seconds: TimeInterval) -> String {
         let minutes = Int(seconds) / 60

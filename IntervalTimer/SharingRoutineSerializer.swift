@@ -33,7 +33,8 @@ struct RoutineSerializer {
             duration: interval.duration,
             sortOrder: interval.sortOrder,
             trackDistance: interval.trackDistance,
-            distanceGoal: interval.distanceGoal
+            distanceGoal: interval.distanceGoal,
+            isRest: interval.isRest
         )
     }
     
@@ -77,7 +78,8 @@ struct RoutineSerializer {
             duration: payload.duration,
             sortOrder: payload.sortOrder,
             trackDistance: payload.trackDistance,
-            distanceGoal: payload.distanceGoal
+            distanceGoal: payload.distanceGoal,
+            isRest: payload.isRest ?? false
         )
     }
     

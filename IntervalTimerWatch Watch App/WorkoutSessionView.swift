@@ -1,11 +1,16 @@
 import SwiftUI
+import SwiftData
 
 struct WorkoutSessionView: View {
     let template: WorkoutTemplate
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
 
     @State private var player: WorkoutPlayer
-    @State private var healthKit = HealthKitManager()
+    @State private var healthKit: HealthKitManager
+    @State private var recorder: WorkoutRecorder
+    /// Set when the workout ends and its report was saved; shows the summary
+    @State private var finishedRecord: WorkoutRecord?
     @State private var showingPauseOverlay = false
     @State private var showingAuthError = false
     /// Total distance at the moment the current step began (meters)
@@ -18,6 +23,18 @@ struct WorkoutSessionView: View {
         self.template = template
         // Starts paused; the lead-in countdown resumes it
         self._player = State(initialValue: WorkoutPlayer(template: template, startPaused: true))
+        // Created together so the recorder reads metrics from this HealthKit session
+        let healthKit = HealthKitManager()
+        self._healthKit = State(initialValue: healthKit)
+        self._recorder = State(initialValue: WorkoutRecorder(
+            sources: .init(
+                distance: { healthKit.distanceWalkingRunning },
+                heartRate: { healthKit.currentHeartRate },
+                calories: { healthKit.activeEnergyBurned },
+                maxHeartRate: { healthKit.maxHeartRate }
+            ),
+            tracksZones: template.showHeartRateZones
+        ))
     }
 
     /// The background color based on current heart rate zone
@@ -31,6 +48,16 @@ struct WorkoutSessionView: View {
     }
 
     var body: some View {
+        if let record = finishedRecord {
+            WatchWorkoutSummaryView(record: record) {
+                dismiss()
+            }
+        } else {
+            workoutView
+        }
+    }
+
+    private var workoutView: some View {
         ZStack {
             // Heart rate zone background
             if template.showHeartRateZones {
@@ -54,7 +81,10 @@ struct WorkoutSessionView: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
-            player.onEvent = { WorkoutFeedback.handle($0) }
+            player.onEvent = { [recorder] event in
+                WorkoutFeedback.handle(event)
+                recorder.handle(event)
+            }
             startWorkout()
         }
         .onDisappear {
@@ -460,6 +490,11 @@ struct WorkoutSessionView: View {
                 do {
                     try healthKit.startWorkout()
                     player.resume()
+                    recorder.begin()
+                    recorder.startSampling(
+                        isRunning: { player.state == .running },
+                        activeElapsed: { player.elapsedTotal }
+                    )
                 } catch {
                     showingAuthError = true
                 }
@@ -467,16 +502,30 @@ struct WorkoutSessionView: View {
         }
     }
 
+    /// Save the workout report, close the HealthKit session, and show the
+    /// summary (or just close if the workout ended before it really started)
     private func endWorkout() {
+        let record = recorder.makeRecord(
+            template: template,
+            deviceName: "Apple Watch",
+            activeDuration: player.elapsedTotal,
+            isPartial: !player.didComplete
+        )
+        if let record {
+            modelContext.insert(record)
+            try? modelContext.save()
+        }
+
         Task {
             do {
                 try await healthKit.endWorkout()
-                await MainActor.run {
-                    dismiss()
-                }
             } catch {
                 print("Failed to end workout: \(error)")
-                await MainActor.run {
+            }
+            await MainActor.run {
+                if let record {
+                    finishedRecord = record
+                } else {
                     dismiss()
                 }
             }

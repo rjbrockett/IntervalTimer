@@ -26,6 +26,12 @@ struct ContentView: View {
                     Label("Downloaded", systemImage: "arrow.down.circle")
                 }
                 .tag(1)
+            
+            WorkoutHistoryView()
+                .tabItem {
+                    Label("History", systemImage: "clock.arrow.circlepath")
+                }
+                .tag(2)
         }
         .onChange(of: pendingImportRecordName) { _, recordName in
             if let recordName {

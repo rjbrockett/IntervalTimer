@@ -12,6 +12,8 @@ A multiplatform interval timer app (iOS, macOS, watchOS) built with SwiftUI and 
 ### Shared files are duplicated (not a shared framework)
 Models and WorkoutPlayer are copied into both targets. The project uses Xcode objectVersion 77 (file-system-synchronized groups), so cross-target file sharing would require fragile pbxproj edits. These can be migrated to a Swift Package later.
 
+Duplicated files that must stay byte-identical (edit the iOS copy, then `cp` it to the watch folder): all `Models*.swift`, `WorkoutPlayer.swift`, `WorkoutRecorder.swift`, `UtilitiesTimeFormatter.swift`. Xcode may need a second build to pick up newly created files.
+
 ## Data Model (SwiftData)
 
 ```
@@ -35,16 +37,32 @@ IntervalItem
 ├── sortOrder: Int
 ├── trackDistance: Bool
 ├── distanceGoal: Double?  (meters, nil = no goal)
+├── isRest: Bool  (rest/recovery interval; shown as recovery in reports)
+
+WorkoutRecord  (one run of a routine — no relationship to WorkoutTemplate)
+├── startedAt / endedAt, deviceName ("iPhone" / "Apple Watch"), isPartial
+├── templateID, originalTemplateID, routineName (snapshot)
+├── activeDuration (pauses excluded), totalDistance?, activeCalories?, avgHeartRate?, maxHeartRate?
+├── zoneSecondsData / splitsData / heartRateData  (JSON blobs; use zoneSeconds / splits / heartRateSamples)
 ```
 
 Adding new fields to models requires updating BOTH iOS and watch copies.
 
+### Workout History
+- `WorkoutRecorder` (shared) turns `WorkoutPlayer.Event.stepEnded` events plus live metric closures into a `WorkoutRecord`; splits record each interval in the order performed with outcome (completed/skipped/restarted/endedEarly), per-split HR, distance, rest recovery, and `BlockContext` (enclosing blocks + repeat numbers, used for "Round 2 of 3" / "Set n")
+- Records are saved when a session ends (nothing saved if ended during the 3-2-1 lead-in); partial = ended before the last interval finished
+- Splits/HR series are blobs so a record syncs as one CloudKit record; deleting a routine keeps its history
+- iPhone views: `WorkoutSummaryView` (shown after a workout and from lists; share exports an image), `WorkoutIntervalsView` (Rounds/Exercises), `RoutineStatsView` (from the routine's … menu), `WorkoutHistoryView` (History tab). Grouping logic lives in `WorkoutReport` (`ViewsWorkoutReport.swift`)
+- Watch shows a compact `WatchWorkoutSummaryView`; full reports appear on iPhone via sync
+
 ### Data Migration (SwiftData VersionedSchema)
-- Both targets have `ModelsMigration.swift` with `SchemaV1` (frozen snapshot of the original non-CloudKit schema), `SchemaV2` (current live models), and `IntervalTimerMigrationPlan`
-- V1→V2 is a custom stage: V2 added attribute defaults, optional relationships, and inverses (`IntervalBlock.template`, `IntervalItem.block`) for CloudKit; the stage re-links blocks/intervals by ID since inverse changes alter relationship storage
+- Both targets have `ModelsMigration.swift` with `SchemaV1` and `SchemaV2` (frozen snapshots), `SchemaV3` (current live models), and `IntervalTimerMigrationPlan`
+- V1→V2 is a custom stage: V2 added attribute defaults, optional relationships, and inverses (`IntervalBlock.template`, `IntervalItem.block`) for CloudKit; the stage re-links blocks/intervals by ID since inverse changes alter relationship storage. It must use the frozen `SchemaV2.*` types, never the live models
+- V2→V3 is a custom stage: adds `IntervalItem.isRest` and `WorkoutRecord`; turns on `isRest` for intervals whose name contains the word "rest"
+- CloudKit schema must be deployed to Production (CloudKit Console) before shipping any schema change
 - CloudKit model rules: every attribute needs a default or must be optional; every relationship must be optional with an inverse; no `.unique` attributes. To-many relationships are `[T]?` — read with `?? []`
 - ModelContainer is initialized with `migrationPlan: IntervalTimerMigrationPlan.self`
-- When adding/removing/renaming model fields, create a new `SchemaV2` with model snapshots of the new schema, add a migration stage to `IntervalTimerMigrationPlan.stages`, and update both iOS and watch copies
+- When adding/removing/renaming model fields, freeze the current live models as snapshot classes inside the current schema enum, create the next `SchemaVn` listing the live models, add a migration stage to `IntervalTimerMigrationPlan.stages`, and update both iOS and watch copies
 - Lightweight migrations (adding optional fields, adding fields with defaults) use `.lightweight(fromVersion:toVersion:)`
 - Custom migrations (renaming, data transforms) use `.custom(fromVersion:toVersion:willMigrate:didMigrate:)`
 - Always keep the previous schema versions intact — they're needed for users upgrading from older versions

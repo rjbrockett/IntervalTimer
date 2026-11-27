@@ -6,7 +6,7 @@ struct IntervalTimer_Watch_App: App {
     let modelContainer: ModelContainer
 
     init() {
-        let schema = Schema(versionedSchema: SchemaV2.self)
+        let schema = Schema(versionedSchema: SchemaV3.self)
         
         #if targetEnvironment(simulator)
         // Simulator: local-only store (CloudKit entitlements unavailable)

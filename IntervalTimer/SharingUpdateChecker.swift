@@ -87,7 +87,8 @@ struct RoutineUpdateChecker {
             duration: payload.duration,
             sortOrder: payload.sortOrder,
             trackDistance: payload.trackDistance,
-            distanceGoal: payload.distanceGoal
+            distanceGoal: payload.distanceGoal,
+            isRest: payload.isRest ?? false
         )
     }
 }

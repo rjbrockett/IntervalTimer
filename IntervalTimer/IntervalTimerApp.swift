@@ -7,7 +7,7 @@ struct IntervalTimerApp: App {
     @State private var pendingImportRecordName: String?
 
     init() {
-        let schema = Schema(versionedSchema: SchemaV2.self)
+        let schema = Schema(versionedSchema: SchemaV3.self)
         
         // Try CloudKit first, fall back to local-only if it fails
         // (e.g., simulator without iCloud sign-in, schema mismatch)

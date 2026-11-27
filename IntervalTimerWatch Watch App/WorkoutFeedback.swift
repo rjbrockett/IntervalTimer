@@ -41,6 +41,8 @@ enum WorkoutFeedback {
             intervalEnd()
         case .workoutCompleted:
             workoutComplete()
+        case .stepEnded:
+            break
         }
     }
 }

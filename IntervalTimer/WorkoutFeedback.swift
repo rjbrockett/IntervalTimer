@@ -89,6 +89,8 @@ final class WorkoutFeedback {
             intervalEnd()
         case .workoutCompleted:
             workoutComplete()
+        case .stepEnded:
+            break
         }
     }
 

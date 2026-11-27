@@ -285,6 +285,7 @@ struct TemplateEditorView: View {
     @State private var isEditing = false
     @State private var showingDeleteConfirmation = false
     @State private var showingShareSheet = false
+    @State private var showingStats = false
     @State private var isAcceptingUpdate = false
     @State private var showingMakeCopyConfirmation = false
     @State private var allCollapsed = false
@@ -691,31 +692,37 @@ struct TemplateEditorView: View {
                     .clipShape(Capsule())
                 }
             } else {
-                // View mode toolbar
-                if template.isDownloaded != true {
-                    ToolbarItem(placement: .primaryAction) {
-                        Button {
-                            isEditing = true
-                        } label: {
-                            Label("Edit", systemImage: "pencil")
+                // View mode toolbar: routine actions live in a "…" menu
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        if template.isDownloaded != true {
+                            Button {
+                                isEditing = true
+                            } label: {
+                                Label("Edit", systemImage: "pencil")
+                            }
+                            
+                            Button {
+                                showingShareSheet = true
+                            } label: {
+                                Label("Share", systemImage: "square.and.arrow.up")
+                            }
+                        } else {
+                            // Downloaded routines can't be edited, only copied
+                            Button {
+                                showingMakeCopyConfirmation = true
+                            } label: {
+                                Label("Make a Copy", systemImage: "doc.on.doc")
+                            }
                         }
-                    }
-                    
-                    ToolbarItem(placement: .primaryAction) {
+                        
                         Button {
-                            showingShareSheet = true
+                            showingStats = true
                         } label: {
-                            Label("Share", systemImage: "square.and.arrow.up")
+                            Label("View Workout Stats", systemImage: "chart.bar.xaxis")
                         }
-                    }
-                } else {
-                    // Downloaded routine: Make a Copy button
-                    ToolbarItem(placement: .primaryAction) {
-                        Button {
-                            showingMakeCopyConfirmation = true
-                        } label: {
-                            Label("Make a Copy", systemImage: "doc.on.doc")
-                        }
+                    } label: {
+                        Label("More", systemImage: "ellipsis.circle")
                     }
                 }
                 
@@ -728,6 +735,10 @@ struct TemplateEditorView: View {
                     .disabled((template.blocks ?? []).isEmpty)
                 }
             }
+        }
+        .navigationDestination(isPresented: $showingStats) {
+            // Parent-context template (stats only read its id and name)
+            RoutineStatsView(template: self.template)
         }
         #if os(iOS)
         .fullScreenCover(isPresented: $showingWorkoutSession) {
@@ -2097,6 +2108,16 @@ struct IntervalRowView: View {
                 geo.frame(in: .global).minY
             } action: { minY in
                 onHeaderPosition(interval.id, minY)
+            }
+            
+            // Rest interval (reported as recovery instead of work)
+            HStack {
+                Toggle("Rest", isOn: Binding(
+                    get: { interval.isRest },
+                    set: { interval.isRest = $0; onChanged() }
+                ))
+                .font(.subheadline)
+                .toggleStyle(.switch)
             }
             
             // Distance tracking

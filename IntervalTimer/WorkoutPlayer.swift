@@ -8,6 +8,9 @@ struct PlaybackStep: Identifiable, Equatable {
     let originalIntervalID: UUID
     let trackDistance: Bool
     let distanceGoal: Double?  // in meters
+    var isRest: Bool = false
+    /// Enclosing blocks, outermost first, with the repeat number for this step
+    var context: [BlockContext] = []
     
     static func == (lhs: PlaybackStep, rhs: PlaybackStep) -> Bool {
         lhs.id == rhs.id
@@ -30,11 +33,25 @@ final class WorkoutPlayer {
         case intervalCompleted
         /// The final interval ran out
         case workoutCompleted
+        /// The current step finished for any reason (fires before moving on)
+        case stepEnded(StepEnd)
+    }
+    
+    /// Details about a step as it finishes, for workout recording
+    struct StepEnd {
+        let step: PlaybackStep
+        /// Active time spent in the step (pauses excluded)
+        let elapsed: TimeInterval
+        /// Active workout time when the step finished
+        let workoutElapsed: TimeInterval
+        let outcome: IntervalSplit.Outcome
     }
     
     private(set) var state: State = .running
     private(set) var elapsedTotal: TimeInterval = 0
     private(set) var currentStepIndex: Int = 0
+    /// True once the final interval ran out (vs. the workout being ended early)
+    private(set) var didComplete = false
     
     /// Called on the main thread when a feedback-worthy moment happens
     @ObservationIgnored var onEvent: ((Event) -> Void)?
@@ -83,10 +100,16 @@ final class WorkoutPlayer {
     }
     
     /// Recursively flatten a single block (handles nesting and intermingled intervals/sub-blocks)
-    private static func flattenBlock(_ block: IntervalBlock) -> [PlaybackStep] {
+    private static func flattenBlock(_ block: IntervalBlock, context: [BlockContext] = []) -> [PlaybackStep] {
         var steps: [PlaybackStep] = []
         
-        for _ in 0..<block.repeatCount {
+        for repeatIndex in 0..<max(0, block.repeatCount) {
+            let stepContext = context + [BlockContext(
+                blockID: block.id,
+                name: block.name,
+                iteration: repeatIndex + 1,
+                repeatCount: block.repeatCount
+            )]
             for child in block.sortedChildren {
                 switch child {
                 case .interval(let interval):
@@ -96,11 +119,13 @@ final class WorkoutPlayer {
                         duration: interval.duration,
                         originalIntervalID: interval.id,
                         trackDistance: interval.trackDistance,
-                        distanceGoal: interval.distanceGoal
+                        distanceGoal: interval.distanceGoal,
+                        isRest: interval.isRest,
+                        context: stepContext
                     )
                     steps.append(step)
                 case .childBlock(let childBlock):
-                    steps.append(contentsOf: flattenBlock(childBlock))
+                    steps.append(contentsOf: flattenBlock(childBlock, context: stepContext))
                 }
             }
         }
@@ -159,15 +184,33 @@ final class WorkoutPlayer {
     }
     
     private func autoAdvanceToNextStep() {
+        reportStepEnded(.completed)
         if currentStepIndex < flattenedSteps.count - 1 {
             currentStepIndex += 1
             restartCurrentStep()
             onEvent?(.intervalCompleted)
         } else {
             // Workout complete
-            end()
+            didComplete = true
+            stop()
             onEvent?(.workoutCompleted)
         }
+    }
+    
+    /// Notify listeners that the current step is finishing
+    private func reportStepEnded(_ outcome: IntervalSplit.Outcome) {
+        guard let step = currentStep else { return }
+        // A timed step that ran out counts as exactly its duration
+        // (the 0.1s timer can overshoot slightly)
+        let elapsed = outcome == .completed && step.duration > 0
+            ? step.duration
+            : currentStepElapsed
+        onEvent?(.stepEnded(StepEnd(
+            step: step,
+            elapsed: elapsed,
+            workoutElapsed: elapsedTotal,
+            outcome: outcome
+        )))
     }
     
     /// Reset timing for the current step so it plays from the beginning
@@ -198,11 +241,16 @@ final class WorkoutPlayer {
     
     func skipToNext() {
         guard currentStepIndex < flattenedSteps.count - 1 else { return }
+        if state == .running { refreshElapsed() }
+        // Advancing a manual (untimed) interval is how it's meant to finish
+        reportStepEnded(isCurrentStepUntimed ? .completed : .skipped)
         currentStepIndex += 1
         restartCurrentStep()
     }
     
     func skipToPrevious() {
+        if state == .running { refreshElapsed() }
+        reportStepEnded(.restarted)
         // If we're more than 3 seconds into current step (or on the first
         // step), restart it; otherwise go back to the previous step
         if currentStepElapsed <= 3.0 && currentStepIndex > 0 {
@@ -211,7 +259,15 @@ final class WorkoutPlayer {
         restartCurrentStep()
     }
     
+    /// End the workout early (user action)
     func end() {
+        guard state != .ended else { return }
+        if state == .running { refreshElapsed() }
+        reportStepEnded(.endedEarly)
+        stop()
+    }
+    
+    private func stop() {
         state = .ended
         stopTimer()
     }

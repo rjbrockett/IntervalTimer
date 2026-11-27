@@ -1,12 +1,17 @@
 import SwiftUI
+import SwiftData
 
 struct WorkoutSessionView: View {
     let template: WorkoutTemplate
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
     
     @State private var player: WorkoutPlayer
     @State private var showingEndConfirmation = false
-    @State private var locationManager = LocationManager()
+    @State private var locationManager: LocationManager
+    @State private var recorder: WorkoutRecorder
+    /// Set when the workout ends and its report was saved; shows the summary
+    @State private var finishedRecord: WorkoutRecord?
     /// Total distance at the moment the current step began (meters)
     @State private var stepStartDistance: Double = 0
     @State private var feedback = WorkoutFeedback()
@@ -30,9 +35,31 @@ struct WorkoutSessionView: View {
         self.template = template
         // Starts paused; the lead-in countdown resumes it
         self._player = State(initialValue: WorkoutPlayer(template: template, startPaused: true))
+        // Created together so the recorder reads distance from this location manager
+        let locationManager = LocationManager()
+        self._locationManager = State(initialValue: locationManager)
+        self._recorder = State(initialValue: WorkoutRecorder(
+            sources: .init(distance: { locationManager.totalDistance }),
+            tracksZones: false
+        ))
     }
     
     var body: some View {
+        if let record = finishedRecord {
+            NavigationStack {
+                WorkoutSummaryView(record: record)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { dismiss() }
+                        }
+                    }
+            }
+        } else {
+            workoutView
+        }
+    }
+    
+    private var workoutView: some View {
         VStack(spacing: 0) {
             // Top bar with elapsed time and end button
             topBar
@@ -83,9 +110,13 @@ struct WorkoutSessionView: View {
                 locationManager.startTracking()
             }
             feedback.prepare()
-            player.onEvent = { [feedback] event in feedback.handle(event) }
+            player.onEvent = { [feedback, recorder] event in
+                feedback.handle(event)
+                recorder.handle(event)
+            }
             runLeadIn {
                 player.resume()
+                recorder.begin()
             }
         }
         .onDisappear {
@@ -93,9 +124,7 @@ struct WorkoutSessionView: View {
         }
         .onChange(of: player.state) { _, newState in
             if newState == .ended {
-                locationManager.stopTracking()
-                feedback.finish()
-                dismiss()
+                finishWorkout()
             }
         }
         .onChange(of: player.currentStepIndex) {
@@ -277,6 +306,35 @@ struct WorkoutSessionView: View {
                 player.skipToNext()
             }
         }
+    }
+    
+    // MARK: - Finish
+    
+    /// Save the workout report and show the summary (or just close if the
+    /// workout ended before it really started)
+    private func finishWorkout() {
+        // Build the record before stopTracking(), which resets the distance
+        #if os(macOS)
+        let deviceName = "Mac"
+        #else
+        let deviceName = "iPhone"
+        #endif
+        let record = recorder.makeRecord(
+            template: template,
+            deviceName: deviceName,
+            activeDuration: player.elapsedTotal,
+            isPartial: !player.didComplete
+        )
+        locationManager.stopTracking()
+        feedback.finish()
+        
+        guard let record else {
+            dismiss()
+            return
+        }
+        modelContext.insert(record)
+        try? modelContext.save()
+        finishedRecord = record
     }
     
     // MARK: - Lead-In Countdown
