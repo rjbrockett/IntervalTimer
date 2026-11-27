@@ -9,6 +9,10 @@ struct WorkoutSessionView: View {
     @State private var locationManager = LocationManager()
     /// Total distance at the moment the current step began (meters)
     @State private var stepStartDistance: Double = 0
+    @State private var feedback = WorkoutFeedback()
+    /// Number shown by the 3-2-1-GO lead-in (0 = "GO"), nil when hidden
+    @State private var leadInCount: Int?
+    @State private var leadInTask: Task<Void, Never>?
     
     /// Whether any interval in this template tracks distance
     private var anyIntervalTracksDistance: Bool {
@@ -24,7 +28,8 @@ struct WorkoutSessionView: View {
     
     init(template: WorkoutTemplate) {
         self.template = template
-        self._player = State(initialValue: WorkoutPlayer(template: template))
+        // Starts paused; the lead-in countdown resumes it
+        self._player = State(initialValue: WorkoutPlayer(template: template, startPaused: true))
     }
     
     var body: some View {
@@ -67,14 +72,29 @@ struct WorkoutSessionView: View {
         #else
         .background(Color(nsColor: .windowBackgroundColor))
         #endif
+        .overlay {
+            // 3-2-1-GO lead-in
+            if let count = leadInCount {
+                leadInOverlay(count: count)
+            }
+        }
         .onAppear {
             if anyIntervalTracksDistance {
                 locationManager.startTracking()
             }
+            feedback.prepare()
+            player.onEvent = { [feedback] event in feedback.handle(event) }
+            runLeadIn {
+                player.resume()
+            }
+        }
+        .onDisappear {
+            leadInTask?.cancel()
         }
         .onChange(of: player.state) { _, newState in
             if newState == .ended {
                 locationManager.stopTracking()
+                feedback.finish()
                 dismiss()
             }
         }
@@ -140,11 +160,22 @@ struct WorkoutSessionView: View {
                     .foregroundStyle(.secondary)
                     .contentTransition(.numericText())
             } else {
-                Text(formatCountdown(player.currentStepTimeRemaining))
-                    .font(.system(size: 80, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(countdownColor)
-                    .contentTransition(.numericText())
+                // Remaining time with the interval's total duration beside it
+                HStack(alignment: .lastTextBaseline, spacing: 2) {
+                    // Rounded up so "3, 2, 1" on screen line up with the tick signals
+                    Text(formatCountdown(player.currentStepTimeRemaining.rounded(.up)))
+                        .font(.system(size: 80, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(countdownColor)
+                        .contentTransition(.numericText())
+                    Text("/" + formatCountdown(player.currentStep?.duration ?? 0))
+                        .font(.system(.title3, design: .rounded))
+                        .fontWeight(.medium)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
             }
         }
     }
@@ -224,7 +255,9 @@ struct WorkoutSessionView: View {
                 if player.state == .running {
                     player.pause()
                 } else if player.state == .paused {
-                    player.resume()
+                    runLeadIn {
+                        player.resume()
+                    }
                 }
             } label: {
                 Image(systemName: player.state == .running ? "pause.fill" : "play.fill")
@@ -243,6 +276,45 @@ struct WorkoutSessionView: View {
             ) {
                 player.skipToNext()
             }
+        }
+    }
+    
+    // MARK: - Lead-In Countdown
+    
+    private func leadInOverlay(count: Int) -> some View {
+        ZStack {
+            Rectangle()
+                .fill(.regularMaterial)
+                .ignoresSafeArea()
+            
+            Text(count > 0 ? "\(count)" : "GO")
+                .font(.system(size: 160, weight: .bold, design: .rounded))
+                .foregroundStyle(count > 0 ? Color.primary : Color.green)
+                .contentTransition(.numericText(countsDown: true))
+        }
+        .transition(.opacity)
+        .accessibilityLabel(count > 0 ? "\(count)" : "Go")
+    }
+    
+    /// Show 3-2-1-GO with a tick on each number, then run `onGo`
+    private func runLeadIn(onGo: @escaping () -> Void) {
+        guard leadInTask == nil else { return }
+        leadInTask = Task { @MainActor in
+            defer { leadInTask = nil }
+            do {
+                for count in [3, 2, 1] {
+                    withAnimation(.snappy) { leadInCount = count }
+                    feedback.countdownTick()
+                    try await Task.sleep(for: .seconds(1))
+                }
+                withAnimation(.snappy) { leadInCount = 0 }
+                feedback.go()
+                onGo()
+                try await Task.sleep(for: .seconds(0.6))
+            } catch {
+                // Cancelled (view went away) — fall through and hide
+            }
+            withAnimation { leadInCount = nil }
         }
     }
     

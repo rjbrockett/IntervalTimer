@@ -10,10 +10,14 @@ struct WorkoutSessionView: View {
     @State private var showingAuthError = false
     /// Total distance at the moment the current step began (meters)
     @State private var stepStartDistance: Double = 0
+    /// Number shown by the 3-2-1-GO lead-in (0 = "GO"), nil when hidden
+    @State private var leadInCount: Int?
+    @State private var leadInTask: Task<Void, Never>?
 
     init(template: WorkoutTemplate) {
         self.template = template
-        self._player = State(initialValue: WorkoutPlayer(template: template))
+        // Starts paused; the lead-in countdown resumes it
+        self._player = State(initialValue: WorkoutPlayer(template: template, startPaused: true))
     }
 
     /// The background color based on current heart rate zone
@@ -42,10 +46,19 @@ struct WorkoutSessionView: View {
             if showingPauseOverlay {
                 pauseOverlay
             }
+
+            // 3-2-1-GO lead-in
+            if let count = leadInCount {
+                leadInOverlay(count: count)
+            }
         }
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
+            player.onEvent = { WorkoutFeedback.handle($0) }
             startWorkout()
+        }
+        .onDisappear {
+            leadInTask?.cancel()
         }
         .onChange(of: player.state) { _, newState in
             if newState == .ended {
@@ -100,10 +113,20 @@ struct WorkoutSessionView: View {
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                 } else {
-                    Text(formatTimeRemaining(player.currentStepTimeRemaining))
-                        .font(.system(size: 48, weight: .bold, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(countdownColor)
+                    // Remaining time with the interval's total duration beside it
+                    HStack(alignment: .lastTextBaseline, spacing: 1) {
+                        // Rounded up so "3, 2, 1" on screen line up with the tick signals
+                        Text(formatTimeRemaining(player.currentStepTimeRemaining.rounded(.up)))
+                            .font(.system(size: 48, weight: .bold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(countdownColor)
+                        Text("/" + formatTimeRemaining(player.currentStep?.duration ?? 0))
+                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
                 }
 
                 // Distance (conditional)
@@ -260,11 +283,7 @@ struct WorkoutSessionView: View {
                         showingPauseOverlay = true
                     }
                 } else if player.state == .paused {
-                    player.resume()
-                    healthKit.resumeWorkout()
-                    withAnimation {
-                        showingPauseOverlay = false
-                    }
+                    resumeWithLeadIn()
                 }
             } label: {
                 Image(systemName: player.state == .running ? "pause.fill" : "play.fill")
@@ -342,11 +361,7 @@ struct WorkoutSessionView: View {
                     .foregroundStyle(.orange)
 
                 Button(action: {
-                    player.resume()
-                    healthKit.resumeWorkout()
-                    withAnimation {
-                        showingPauseOverlay = false
-                    }
+                    resumeWithLeadIn()
                 }) {
                     Label("Resume", systemImage: "play.fill")
                         .frame(maxWidth: .infinity)
@@ -374,13 +389,58 @@ struct WorkoutSessionView: View {
             .onEnded { value in
                 if value.translation.width < -50 {
                     // Swipe left -> resume
-                    player.resume()
-                    healthKit.resumeWorkout()
-                    withAnimation {
-                        showingPauseOverlay = false
-                    }
+                    resumeWithLeadIn()
                 }
             }
+    }
+
+    // MARK: - Lead-In Countdown
+
+    private func leadInOverlay(count: Int) -> some View {
+        ZStack {
+            Color.black
+                .ignoresSafeArea()
+
+            Text(count > 0 ? "\(count)" : "GO")
+                .font(.system(size: count > 0 ? 90 : 60, weight: .bold, design: .rounded))
+                .foregroundStyle(count > 0 ? Color.white : Color.green)
+                .contentTransition(.numericText(countsDown: true))
+        }
+        .transition(.opacity)
+        .accessibilityLabel(count > 0 ? "\(count)" : "Go")
+    }
+
+    /// Show 3-2-1-GO with a tap on each number, then run `onGo`
+    private func runLeadIn(onGo: @escaping () -> Void) {
+        guard leadInTask == nil else { return }
+        leadInTask = Task { @MainActor in
+            defer { leadInTask = nil }
+            do {
+                for count in [3, 2, 1] {
+                    withAnimation(.snappy) { leadInCount = count }
+                    WorkoutFeedback.countdownTick()
+                    try await Task.sleep(for: .seconds(1))
+                }
+                withAnimation(.snappy) { leadInCount = 0 }
+                WorkoutFeedback.go()
+                onGo()
+                try await Task.sleep(for: .seconds(0.6))
+            } catch {
+                // Cancelled (view went away) — fall through and hide
+            }
+            withAnimation { leadInCount = nil }
+        }
+    }
+
+    private func resumeWithLeadIn() {
+        guard player.state == .paused else { return }
+        withAnimation {
+            showingPauseOverlay = false
+        }
+        runLeadIn {
+            player.resume()
+            healthKit.resumeWorkout()
+        }
     }
 
     // MARK: - Workout Lifecycle
@@ -391,9 +451,18 @@ struct WorkoutSessionView: View {
                 if !healthKit.isAuthorized {
                     try await healthKit.requestAuthorization()
                 }
-                try healthKit.startWorkout()
             } catch {
                 showingAuthError = true
+                return
+            }
+            // Start the HealthKit session and timer together on "GO"
+            runLeadIn {
+                do {
+                    try healthKit.startWorkout()
+                    player.resume()
+                } catch {
+                    showingAuthError = true
+                }
             }
         }
     }

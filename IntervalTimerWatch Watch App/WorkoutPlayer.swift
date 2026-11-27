@@ -22,27 +22,47 @@ final class WorkoutPlayer {
         case ended
     }
     
+    /// Moments the UI should signal with sound/haptics
+    enum Event {
+        /// Seconds left in the current timed interval (3, 2, 1)
+        case countdownTick(Int)
+        /// A timed interval ran out and playback moved to the next one
+        case intervalCompleted
+        /// The final interval ran out
+        case workoutCompleted
+    }
+    
     private(set) var state: State = .running
     private(set) var elapsedTotal: TimeInterval = 0
     private(set) var currentStepIndex: Int = 0
     
+    /// Called on the main thread when a feedback-worthy moment happens
+    @ObservationIgnored var onEvent: ((Event) -> Void)?
+    
     private var flattenedSteps: [PlaybackStep] = []
     
-    // Timing state
+    // Timing state. While running, elapsed values are derived from these
+    // start dates. On resume they're re-anchored so paused time is excluded.
     private var sessionStartTime: Date?
-    private var lastResumeTime: Date?
-    private var accumulatedPausedDuration: TimeInterval = 0
     private var timer: Timer?
     
     // Current step elapsed time
     private(set) var currentStepElapsed: TimeInterval = 0
     private var currentStepStartTime: Date?
     
-    init(template: WorkoutTemplate) {
+    /// Last countdown second announced for the current step, to fire each tick once
+    private var lastTickSecond: Int?
+    
+    /// - Parameter startPaused: Begin paused so the UI can run a lead-in
+    ///   countdown before calling `resume()`.
+    init(template: WorkoutTemplate, startPaused: Bool = false) {
         self.flattenedSteps = Self.flatten(template: template)
-        self.sessionStartTime = Date()
-        self.lastResumeTime = Date()
-        self.currentStepStartTime = Date()
+        let now = Date()
+        self.sessionStartTime = now
+        self.currentStepStartTime = now
+        if startPaused {
+            self.state = .paused
+        }
         startTimer()
     }
     
@@ -102,84 +122,93 @@ final class WorkoutPlayer {
     }
     
     private func updateElapsedTime() {
-        guard state == .running,
-              let sessionStart = sessionStartTime,
-              lastResumeTime != nil,
-              let stepStart = currentStepStartTime else {
-            return
-        }
+        guard state == .running else { return }
+        refreshElapsed()
         
-        let now = Date()
-        elapsedTotal = now.timeIntervalSince(sessionStart) - accumulatedPausedDuration
-        currentStepElapsed = now.timeIntervalSince(stepStart)
-        
-        // Auto-advance to next step if current step duration is exceeded
         // Steps with duration 0 are untimed — only advanced manually via skipToNext()
-        if let currentStep = currentStep, currentStep.duration > 0, currentStepElapsed >= currentStep.duration {
+        guard let currentStep = currentStep, currentStep.duration > 0 else { return }
+        
+        if currentStepElapsed >= currentStep.duration {
+            // Auto-advance to next step when current step duration is exceeded
             autoAdvanceToNextStep()
+        } else {
+            announceCountdownTick(for: currentStep)
         }
+    }
+    
+    /// Recompute elapsed values from the anchor dates
+    private func refreshElapsed() {
+        guard let sessionStart = sessionStartTime,
+              let stepStart = currentStepStartTime else { return }
+        let now = Date()
+        elapsedTotal = now.timeIntervalSince(sessionStart)
+        currentStepElapsed = now.timeIntervalSince(stepStart)
+    }
+    
+    /// Fire a tick as the remaining time crosses 3, 2, and 1 seconds.
+    /// Skips the second the step began in, so short steps don't tick
+    /// on top of the previous interval's end signal.
+    private func announceCountdownTick(for step: PlaybackStep) {
+        let secondsLeft = Int((step.duration - currentStepElapsed).rounded(.up))
+        let firstSecond = Int(step.duration.rounded(.up))
+        guard (1...3).contains(secondsLeft),
+              secondsLeft < firstSecond,
+              secondsLeft != lastTickSecond else { return }
+        lastTickSecond = secondsLeft
+        onEvent?(.countdownTick(secondsLeft))
     }
     
     private func autoAdvanceToNextStep() {
         if currentStepIndex < flattenedSteps.count - 1 {
             currentStepIndex += 1
-            currentStepStartTime = Date()
-            currentStepElapsed = 0
+            restartCurrentStep()
+            onEvent?(.intervalCompleted)
         } else {
             // Workout complete
             end()
+            onEvent?(.workoutCompleted)
         }
+    }
+    
+    /// Reset timing for the current step so it plays from the beginning
+    private func restartCurrentStep() {
+        currentStepStartTime = Date()
+        currentStepElapsed = 0
+        lastTickSecond = nil
     }
     
     // MARK: - Public Controls
     
     func pause() {
         guard state == .running else { return }
+        // Capture exact elapsed values; they stay frozen while paused
+        refreshElapsed()
         state = .paused
-        
-        // Track when we paused for accurate elapsed time calculation
-        lastResumeTime = nil
     }
     
     func resume() {
         guard state == .paused else { return }
-        state = .running
-        
-        // Calculate how long we were paused and add it to accumulated pause duration
+        // Re-anchor start dates so the frozen elapsed values continue from
+        // where they left off — paused time doesn't count toward the step
         let now = Date()
-        if let lastResume = lastResumeTime {
-            // This shouldn't happen, but safe guard
-            accumulatedPausedDuration += now.timeIntervalSince(lastResume)
-        } else if let sessionStart = sessionStartTime {
-            let totalElapsedSinceStart = now.timeIntervalSince(sessionStart)
-            accumulatedPausedDuration = totalElapsedSinceStart - elapsedTotal
-        }
-        
-        lastResumeTime = now
+        sessionStartTime = now.addingTimeInterval(-elapsedTotal)
+        currentStepStartTime = now.addingTimeInterval(-currentStepElapsed)
+        state = .running
     }
     
     func skipToNext() {
         guard currentStepIndex < flattenedSteps.count - 1 else { return }
         currentStepIndex += 1
-        currentStepStartTime = Date()
-        currentStepElapsed = 0
+        restartCurrentStep()
     }
     
     func skipToPrevious() {
-        // If we're more than 3 seconds into current step, restart it
-        if currentStepElapsed > 3.0 {
-            currentStepStartTime = Date()
-            currentStepElapsed = 0
-        } else if currentStepIndex > 0 {
-            // Otherwise go to previous step
+        // If we're more than 3 seconds into current step (or on the first
+        // step), restart it; otherwise go back to the previous step
+        if currentStepElapsed <= 3.0 && currentStepIndex > 0 {
             currentStepIndex -= 1
-            currentStepStartTime = Date()
-            currentStepElapsed = 0
-        } else {
-            // At first step, just restart it
-            currentStepStartTime = Date()
-            currentStepElapsed = 0
         }
+        restartCurrentStep()
     }
     
     func end() {
