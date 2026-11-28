@@ -277,6 +277,8 @@ struct TemplateEditorView: View {
     @Environment(\.modelContext) private var parentContext
     @Environment(\.dismiss) private var dismiss
     let template: WorkoutTemplate
+    /// Opens this routine's workout stats (pushed by the enclosing navigation stack)
+    var onViewStats: (() -> Void)? = nil
     
     @State private var editingTemplateName = false
     @State private var hasUnsavedChanges = false
@@ -285,7 +287,6 @@ struct TemplateEditorView: View {
     @State private var isEditing = false
     @State private var showingDeleteConfirmation = false
     @State private var showingShareSheet = false
-    @State private var showingStats = false
     @State private var isAcceptingUpdate = false
     @State private var showingMakeCopyConfirmation = false
     @State private var allCollapsed = false
@@ -717,10 +718,11 @@ struct TemplateEditorView: View {
                         }
                         
                         Button {
-                            showingStats = true
+                            onViewStats?()
                         } label: {
                             Label("View Workout Stats", systemImage: "chart.bar.xaxis")
                         }
+                        .disabled(onViewStats == nil)
                     } label: {
                         Label("More", systemImage: "ellipsis.circle")
                     }
@@ -735,10 +737,6 @@ struct TemplateEditorView: View {
                     .disabled((template.blocks ?? []).isEmpty)
                 }
             }
-        }
-        .navigationDestination(isPresented: $showingStats) {
-            // Parent-context template (stats only read its id and name)
-            RoutineStatsView(template: self.template)
         }
         #if os(iOS)
         .fullScreenCover(isPresented: $showingWorkoutSession) {

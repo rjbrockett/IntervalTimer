@@ -115,6 +115,34 @@ struct ContentView: View {
     }
 }
 
+// MARK: - Routine Detail
+
+/// The routine screen plus anything it pushes (workout stats → summary).
+///
+/// Navigation is path-based and the destinations are registered here, outside
+/// `TemplateEditorView`. The editor re-renders constantly (scroll/geometry
+/// tracking), and a destination declared inside it with
+/// `navigationDestination(isPresented:)` was rebuilt on every render, which
+/// froze the app in an endless update loop.
+struct RoutineDetailStack: View {
+    let template: WorkoutTemplate
+    @State private var path = NavigationPath()
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            TemplateEditorView(template: template) {
+                path.append(RoutineStatsRoute(templateID: template.id, routineName: template.name))
+            }
+            .navigationDestination(for: RoutineStatsRoute.self) { route in
+                RoutineStatsView(route: route)
+            }
+            .navigationDestination(for: WorkoutRecord.self) { record in
+                WorkoutSummaryView(record: record)
+            }
+        }
+    }
+}
+
 // MARK: - My Routines Tab
 
 struct MyRoutinesView: View {
@@ -134,7 +162,9 @@ struct MyRoutinesView: View {
             templateList
         } detail: {
             if let template = selectedTemplate {
-                TemplateEditorView(template: template)
+                // Keyed by routine so switching routines resets to the root
+                RoutineDetailStack(template: template)
+                    .id(template.id)
             } else {
                 Text("Select a routine")
                     .foregroundStyle(.secondary)
@@ -449,7 +479,9 @@ struct DownloadedRoutinesView: View {
             downloadedList
         } detail: {
             if let template = selectedTemplate {
-                TemplateEditorView(template: template)
+                // Keyed by routine so switching routines resets to the root
+                RoutineDetailStack(template: template)
+                    .id(template.id)
             } else {
                 Text("Select a routine")
                     .foregroundStyle(.secondary)

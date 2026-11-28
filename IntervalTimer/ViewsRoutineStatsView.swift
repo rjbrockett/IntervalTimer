@@ -1,15 +1,22 @@
 import SwiftUI
 import SwiftData
 
+/// Navigation value for a routine's stats page. Plain values (not the model)
+/// so the route stays stable while the routine screen re-renders.
+struct RoutineStatsRoute: Hashable {
+    let templateID: UUID
+    let routineName: String
+}
+
 /// Every time one routine has been run, newest first
 struct RoutineStatsView: View {
     let routineName: String
     @Environment(\.modelContext) private var modelContext
     @Query private var records: [WorkoutRecord]
 
-    init(template: WorkoutTemplate) {
-        routineName = template.name
-        let templateID: UUID? = template.id
+    init(route: RoutineStatsRoute) {
+        routineName = route.routineName
+        let templateID: UUID? = route.templateID
         _records = Query(
             filter: #Predicate<WorkoutRecord> { $0.templateID == templateID },
             sort: \WorkoutRecord.startedAt,
@@ -67,9 +74,6 @@ struct RoutineStatsView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .navigationDestination(for: WorkoutRecord.self) { record in
-            WorkoutSummaryView(record: record)
-        }
     }
 
     private func summaryStat(_ title: String, _ value: String) -> some View {
